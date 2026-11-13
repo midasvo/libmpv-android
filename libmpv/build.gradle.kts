@@ -52,17 +52,18 @@ mavenPublishing {
         )
     )
 
+    // The version comes from the tag: publish.yaml passes -PVERSION_NAME=<tag without the v>.
     coordinates(
-        groupId = "dev.jdtech.mpv",
+        groupId = "io.github.midasvo",
         artifactId = "libmpv",
-        version = "1.0.0"
+        version = providers.gradleProperty("VERSION_NAME").getOrElse("0.0.0-SNAPSHOT")
     )
 
     pom {
         name = "libmpv-android"
-        description = "libmpv for Android"
+        description = "libmpv for Android (midasvo fork of jarnedemeulemeester/libmpv-android)"
         inceptionYear = "2023"
-        url = "https://github.com/jarnedemeulemeester/libmpv-android"
+        url = "https://github.com/midasvo/libmpv-android"
         licenses {
             license {
                 name = "GNU General Public License v3.0 or later"
@@ -71,19 +72,25 @@ mavenPublishing {
         }
         developers {
             developer {
+                id = "midasvo"
+                name = "Midas van Oene"
+                url = "https://github.com/midasvo"
+            }
+            developer {
                 id = "jarnedemeulemeester"
                 name = "Jarne Demeulemeester"
                 email = "jarnedemeulemeester@gmail.com"
+                roles.add("original author")
             }
         }
         scm {
-            url = "https://github.com/jarnedemeulemeester/libmpv-android.git"
-            connection = "scm:git@github.com:jarnedemeulemeester/libmpv-android.git"
-            developerConnection = "scm:git@github.com:jarnedemeulemeester/libmpv-android.git"
+            url = "https://github.com/midasvo/libmpv-android"
+            connection = "scm:git:https://github.com/midasvo/libmpv-android.git"
+            developerConnection = "scm:git:ssh://git@github.com/midasvo/libmpv-android.git"
         }
         issueManagement {
             system = "GitHub"
-            url = "https://github.com/jarnedemeulemeester/libmpv-android/issues"
+            url = "https://github.com/midasvo/libmpv-android/issues"
         }
     }
 }
