@@ -1,0 +1,103 @@
+name: Sync upstream
+
+# Merges jarnedemeulemeester/libmpv-android main into the upstream-sync branch
+# and opens (or updates) a PR to main. Merges, never rebases, so released tags
+# stay on main's history. See RELEASING.md.
+
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'midasvo/libmpv-android' }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: https://github.com/jarnedemeulemeester/libmpv-android.git
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --quiet "$UPSTREAM" main
+          upstream=$(git rev-parse FETCH_HEAD)
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "main already contains upstream $upstream"
+            echo "result=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git switch -C upstream-sync
+          if git merge --no-ff --no-edit -m "Merge upstream main (${upstream:0:7})" "$upstream"; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the PR
+        if: steps.merge.outputs.result == 'merged'
+        run: |
+          upstream=${{ steps.merge.outputs.upstream }}
+          git push --force origin upstream-sync
+          {
+            echo "Merges jarnedemeulemeester/libmpv-android@${upstream} into \`main\`."
+            echo
+            echo "### Upstream commits"
+            git log --no-merges --format='- %s (%h)' main.."$upstream"
+            echo
+            echo "Merge with **Create a merge commit** (not squash or rebase), so upstream's history stays intact. See RELEASING.md."
+          } > "$RUNNER_TEMP/body.md"
+
+          if gh pr view upstream-sync --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit upstream-sync --title "Merge upstream main (${upstream:0:7})" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head upstream-sync \
+              --title "Merge upstream main (${upstream:0:7})" --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+          # A PR opened with GITHUB_TOKEN does not trigger pull_request workflows,
+          # but workflow_dispatch does, and its check lands on the same commit.
+          gh workflow run build.yaml --ref upstream-sync
+
+      - name: Report a conflict
+        if: steps.merge.outputs.result == 'conflict'
+        run: |
+          upstream=${{ steps.merge.outputs.upstream }}
+          title="Upstream sync needs a manual merge"
+          {
+            echo "Merging jarnedemeulemeester/libmpv-android@${upstream} into \`main\` conflicts in:"
+            echo
+            sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt"
+            echo
+            echo "Resolve locally as described in RELEASING.md (\"Upstream conflicts\")."
+          } > "$RUNNER_TEMP/issue.md"
+          existing=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/issue.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+          fi

@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch: # used by sync-upstream.yaml, whose PRs don't trigger pull_request
 
 jobs:
   build:
