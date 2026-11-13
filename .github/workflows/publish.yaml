@@ -10,10 +10,12 @@ jobs:
     name: Publish
     runs-on: ubuntu-latest
     environment: release
-    if: ${{ contains(github.repository_owner, 'jarnedemeulemeester') || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.repository == 'midasvo/libmpv-android' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release notes need the merge-base with upstream
 
       - name: Setup Java JDK
         uses: actions/setup-java@v6
@@ -46,12 +48,22 @@ jobs:
         working-directory: ./buildscripts
         run: ./patch.sh
 
+      # GPL corresponding source: this repository at the tag plus every
+      # dependency exactly as it is built (downloaded and patched).
+      # Packed before the build so no build output ends up in it.
+      - name: Pack corresponding source
+        run: |
+          name="libmpv-${GITHUB_REF_NAME#v}-sources"
+          tar --exclude=.git --exclude=./buildscripts/sdk \
+              --transform "s,^\.,$name," -cf - . | xz -T0 -6 > "$RUNNER_TEMP/$name.tar.xz"
+          ls -lh "$RUNNER_TEMP/$name.tar.xz"
+
       - name: Build
         working-directory: ./buildscripts
         run: ./build.sh
 
       - name: Publish
-        run: ./gradlew publishToMavenCentral --no-configuration-cache
+        run: ./gradlew publishToMavenCentral --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.OSSRH_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.OSSRH_PASSWORD }}
@@ -59,9 +71,32 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
 
+      - name: Write release notes
+        run: |
+          git fetch --quiet https://github.com/jarnedemeulemeester/libmpv-android.git main
+          upstream=$(git merge-base HEAD FETCH_HEAD)
+          {
+            echo "\`io.github.midasvo:libmpv:${GITHUB_REF_NAME#v}\`"
+            echo
+            echo "Based on upstream jarnedemeulemeester/libmpv-android@${upstream}."
+            echo
+            echo "| Component | Version |"
+            echo "|---|---|"
+            sed -n 's/^v_\([a-z0-9_]*\)=\(.*\)$/| \1 | \2 |/p' buildscripts/include/depinfo.sh
+            echo
+            echo "## Licence"
+            echo
+            echo "The native libraries in this AAR are effectively **GPL-3.0-or-later** (\`libmpv.so\` links FFmpeg and other GPL components). Licences per component are listed in the [README](https://github.com/midasvo/libmpv-android/blob/${GITHUB_REF_NAME}/README.md#licensing)."
+            echo
+            echo "The complete corresponding source of this build (this repository at \`${GITHUB_REF_NAME}\` plus every dependency as downloaded and patched) is attached as \`libmpv-${GITHUB_REF_NAME#v}-sources.tar.xz\`."
+          } > release-notes.md
+          cat release-notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           draft: true
+          body_path: release-notes.md
           files: |
             ./libmpv/build/outputs/aar/libmpv-release.aar
+            ${{ runner.temp }}/libmpv-*-sources.tar.xz
