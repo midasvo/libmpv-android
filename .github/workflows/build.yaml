@@ -40,6 +40,8 @@ jobs:
         working-directory: ./buildscripts
         env:
           IN_CI: 1
+          # retries for flaky hosts (lua.org TLS dropped a main build); download-deps.sh reads $WGET
+          WGET: wget --tries=5 --waitretry=10 --retry-connrefused --retry-on-host-error
         run: ./download.sh
 
       - name: Apply patches
