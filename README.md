@@ -1,5 +1,9 @@
 # libmpv for Android
 
+> [!NOTE]
+> **About this fork.** This is [midasvo/libmpv-android](https://github.com/midasvo/libmpv-android), a fork of [jarnedemeulemeester/libmpv-android](https://github.com/jarnedemeulemeester/libmpv-android) that publishes its own releases as `io.github.midasvo:libmpv` for [Ephyra](https://github.com/midasvo/ephyra), so a libmpv update does not have to wait for an upstream release ([midasvo/ephyra#654](https://github.com/midasvo/ephyra/issues/654)).
+> `main` follows upstream; the fork only changes the Maven coordinates, the release workflow and this note. The Kotlin package stays `dev.jdtech.mpv`. Report problems with these builds [here](https://github.com/midasvo/libmpv-android/issues), not upstream.
+
 Based on [mpv-android](https://github.com/mpv-android/mpv-android)
 
 ## Building from source
