@@ -11,9 +11,9 @@ Keep this list short. Every extra line is a possible merge conflict.
 - `.github/workflows/publish.yaml`: repository guard, version from the tag, source tarball, release notes
 - `.github/workflows/build.yaml`: `workflow_dispatch` trigger and download retries (`WGET`)
 - `buildscripts/scripts/mpv.sh`: `-Dbuild-date=false`, so `libmpv.so` is reproducible (worth sending upstream)
-- `.github/workflows/sync-upstream.yaml` and this file
+- `.github/workflows/sync-upstream.yaml`, `docs/adr/` and this file
 
-The Kotlin package stays `dev.jdtech.mpv`. Do not rename it.
+The Kotlin package stays `dev.jdtech.mpv`. Do not rename it: see [ADR 0001](docs/adr/0001-keep-the-kotlin-package.md).
 
 ## Keeping up with upstream
 
