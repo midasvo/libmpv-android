@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <pthread.h>
 #include <jni.h>
 #include <mpv/client.h>
@@ -13,6 +14,8 @@ struct MPVInstance {
     std::atomic<bool> event_thread_request_exit{false};
 
     jobject javaObject = nullptr;
-    jobject appCtx = nullptr;
+
+    // guards surface and the "wid" option (attach, detach, destroy)
+    std::mutex surface_mutex;
     jobject surface = nullptr;
 };

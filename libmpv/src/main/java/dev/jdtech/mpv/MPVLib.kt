@@ -1,6 +1,7 @@
 package dev.jdtech.mpv
 
 import android.content.Context
+import android.util.Log
 import android.view.Surface
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -166,33 +167,27 @@ class MPVLib private constructor(nativePtr: Long) {
     }
 
     fun eventProperty(property: String, value: Long) {
-        for (o in observers)
-            o.eventProperty(property, value)
+        dispatch(observers, "eventProperty") { o -> o.eventProperty(property, value) }
     }
 
     fun eventProperty(property: String, value: Double) {
-        for (o in observers)
-            o.eventProperty(property, value)
+        dispatch(observers, "eventProperty") { o -> o.eventProperty(property, value) }
     }
 
     fun eventProperty(property: String, value: Boolean) {
-        for (o in observers)
-            o.eventProperty(property, value)
+        dispatch(observers, "eventProperty") { o -> o.eventProperty(property, value) }
     }
 
     fun eventProperty(property: String, value: String) {
-        for (o in observers)
-            o.eventProperty(property, value)
+        dispatch(observers, "eventProperty") { o -> o.eventProperty(property, value) }
     }
 
     fun eventProperty(property: String) {
-        for (o in observers)
-            o.eventProperty(property)
+        dispatch(observers, "eventProperty") { o -> o.eventProperty(property) }
     }
 
     fun event(eventId: Int) {
-        for (o in observers)
-            o.event(eventId)
+        dispatch(observers, "event") { o -> o.event(eventId) }
     }
 
     fun addLogObserver(o: LogObserver) {
@@ -204,8 +199,19 @@ class MPVLib private constructor(nativePtr: Long) {
     }
 
     fun logMessage(prefix: String, level: Int, text: String) {
-        for (o in logObservers)
-            o.logMessage(prefix, level, text)
+        dispatch(logObservers, "logMessage") { o -> o.logMessage(prefix, level, text) }
+    }
+
+    // Calls every observer even if one of them throws, so a faulty observer
+    // cannot stop delivery to the ones registered after it.
+    private inline fun <T> dispatch(targets: Iterable<T>, callback: String, call: (T) -> Unit) {
+        for (o in targets) {
+            try {
+                call(o)
+            } catch (e: Exception) {
+                Log.e("mpv", "Observer ${o?.javaClass?.name} threw in $callback", e)
+            }
+        }
     }
 
     interface EventObserver {

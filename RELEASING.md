@@ -62,7 +62,7 @@ Versions are our own semver, starting at `1.1.0`. Raise the minor version for de
    git tag -a v1.2.0 -m "libmpv 1.2.0"
    git push origin v1.2.0
    ```
-3. `publish.yaml` runs in the `release` environment (only `v*` tags can deploy). It refuses tags that are not `vX.Y.Z` or whose commit is not contained in `main`. It builds all four ABIs (about 25 minutes) and runs the AAR check (`buildscripts/check-aar.sh`) first. It then creates the **draft** GitHub release with the AAR, `libmpv-<version>-sources.tar.xz` and generated notes, and only after that signs and uploads to Maven Central with automatic release.
+3. `publish.yaml` runs in the `release` environment (only `v*` tags can deploy). It refuses tags that are not `vX.Y.Z` or whose commit is not contained in `main`, and versions that are already on Maven Central. It builds all four ABIs (about 25 minutes) and runs the AAR check (`buildscripts/check-aar.sh`) first. It then creates the **draft** GitHub release with the AAR, `libmpv-<version>-sources.tar.xz` and generated notes, and only after that signs and uploads to Maven Central with automatic release.
 4. Check the deployment on [central.sonatype.com → Deployments](https://central.sonatype.com/publishing/deployments). It appears on `repo1.maven.org` within about 30 minutes, and in search later.
 5. Check the draft release notes, add what changed for the player, and publish the release.
 6. Bump Ephyra: `libmpv` in `gradle/libs.versions.toml`, then run `docs/mpv-checklist.md`.

@@ -8,8 +8,10 @@
 bool acquire_jni_env(JavaVM *vm, JNIEnv **env);
 void init_methods_cache(JNIEnv *env);
 
-// Like NewStringUTF, but safe for strings that are not valid UTF-8: invalid
-// bytes are replaced with '?'. Returns nullptr when str is nullptr.
+// Creates a Java string from standard UTF-8 (supplementary characters as 4-byte
+// sequences, which become surrogate pairs). Unlike NewStringUTF it does not
+// expect Modified UTF-8 and is safe for invalid input: each invalid byte is
+// replaced with '?'. Returns nullptr when str is nullptr.
 jstring new_string_utf_safe(JNIEnv *env, const char *str);
 
 #ifndef UTIL_EXTERN

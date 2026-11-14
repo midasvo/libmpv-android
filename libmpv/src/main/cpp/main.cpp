@@ -4,6 +4,7 @@
 #include <ctime>
 #include <clocale>
 #include <atomic>
+#include <mutex>
 
 #include <mpv/client.h>
 
@@ -30,14 +31,24 @@ extern "C" {
     jni_func(jint, nativeRequestLogMessages, jlong instance, jstring jlevel);
 };
 
-static void prepare_environment(JNIEnv *env, MPVInstance* instance) {
+static std::once_flag ffmpeg_jni_flag;
+
+static void prepare_environment(JNIEnv *env, MPVInstance* instance, jobject appctx) {
     setlocale(LC_NUMERIC, "C");
 
-    if (env->GetJavaVM(&instance->vm) == JNI_OK && instance->vm)
-        av_jni_set_java_vm(instance->vm, nullptr);
+    if (env->GetJavaVM(&instance->vm) != JNI_OK)
+        instance->vm = nullptr;
 
-    if (instance->appCtx)
-        av_jni_set_android_app_ctx(instance->appCtx, nullptr);
+    std::call_once(ffmpeg_jni_flag, [env, instance, appctx]() {
+        if (instance->vm)
+            av_jni_set_java_vm(instance->vm, nullptr);
+
+        // FFmpeg keeps this pointer process-wide, so the global ref is never released;
+        // it refers to the Application context, which lives as long as the process.
+        jobject app_ctx = appctx ? env->NewGlobalRef(appctx) : nullptr;
+        if (app_ctx)
+            av_jni_set_android_app_ctx(app_ctx, nullptr);
+    });
 
     init_methods_cache(env);
 }
@@ -47,12 +58,10 @@ jni_func(jlong, nativeCreate, jobject thiz, jobject appctx) {
     instance->event_thread_id = 0;
     instance->event_thread_request_exit = false;
     instance->javaObject = env->NewGlobalRef(thiz);
-    instance->appCtx = env->NewGlobalRef(appctx);
-    prepare_environment(env, instance);
+    prepare_environment(env, instance, appctx);
 
     instance->mpv = mpv_create();
     if (!instance->mpv) {
-        env->DeleteGlobalRef(instance->appCtx);
         env->DeleteGlobalRef(instance->javaObject);
         delete instance;
         return 0;
@@ -98,11 +107,13 @@ jni_func(void, nativeDestroy, jlong instance) {
     }
 
     mpv_terminate_destroy(mpv_instance->mpv);
-    if (mpv_instance->surface) {
-        env->DeleteGlobalRef(mpv_instance->surface);
-        mpv_instance->surface = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mpv_instance->surface_mutex);
+        if (mpv_instance->surface) {
+            env->DeleteGlobalRef(mpv_instance->surface);
+            mpv_instance->surface = nullptr;
+        }
     }
-    env->DeleteGlobalRef(mpv_instance->appCtx);
     env->DeleteGlobalRef(mpv_instance->javaObject);
     delete mpv_instance;
 }

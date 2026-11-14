@@ -2,9 +2,11 @@
 #include "jni_utils.h"
 
 #include <jni.h>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
-#include <string>
+#include <vector>
 
 bool acquire_jni_env(JavaVM *vm, JNIEnv **env)
 {
@@ -17,14 +19,17 @@ bool acquire_jni_env(JavaVM *vm, JNIEnv **env)
     return ret == JNI_OK;
 }
 
-// Returns the length of the valid UTF-8 sequence starting at s, or 0 if the
-// bytes at s are not valid UTF-8 (overlong forms, surrogates and code points
-// above U+10FFFF are rejected). Never reads past a terminating NUL, since a
-// NUL is never a valid continuation byte.
-static size_t utf8_sequence_length(const unsigned char *s) {
+// Decodes the UTF-8 sequence starting at s: returns its length and stores the
+// code point in *cp, or returns 0 if the bytes at s are not valid UTF-8
+// (overlong forms, surrogates and code points above U+10FFFF are rejected).
+// Never reads past a terminating NUL, since a NUL is never a valid
+// continuation byte.
+static size_t utf8_decode(const unsigned char *s, uint32_t *cp) {
     unsigned char c = s[0];
-    if (c < 0x80)
+    if (c < 0x80) {
+        *cp = c;
         return 1;
+    }
 
     size_t len;
     unsigned char lo = 0x80, hi = 0xbf; // allowed range of the second byte
@@ -52,6 +57,11 @@ static size_t utf8_sequence_length(const unsigned char *s) {
         if ((s[i] & 0xc0) != 0x80)
             return 0;
     }
+
+    uint32_t value = c & (0x7f >> len); // payload bits of the lead byte
+    for (size_t i = 1; i < len; i++)
+        value = (value << 6) | (s[i] & 0x3f);
+    *cp = value;
     return len;
 }
 
@@ -59,30 +69,34 @@ jstring new_string_utf_safe(JNIEnv *env, const char *str) {
     if (!str)
         return nullptr;
 
+    // Decode to UTF-16 ourselves and use NewString: NewStringUTF expects
+    // Modified UTF-8, which encodes supplementary characters differently.
     const unsigned char *s = reinterpret_cast<const unsigned char*>(str);
+    std::vector<jchar> units;
+    units.reserve(strlen(str));
     size_t i = 0;
     while (s[i]) {
-        size_t n = utf8_sequence_length(s + i);
-        if (n == 0)
-            break;
+        uint32_t cp;
+        size_t n = utf8_decode(s + i, &cp);
+        if (n == 0) {
+            units.push_back('?');
+            i++;
+            continue;
+        }
+        if (cp >= 0x10000) {
+            cp -= 0x10000;
+            units.push_back(static_cast<jchar>(0xd800 + (cp >> 10)));
+            units.push_back(static_cast<jchar>(0xdc00 + (cp & 0x3ff)));
+        } else {
+            units.push_back(static_cast<jchar>(cp));
+        }
         i += n;
     }
-    if (!s[i])
-        return env->NewStringUTF(str);
 
-    // Invalid byte at i: copy the valid prefix and replace each invalid byte.
-    std::string sanitized(str, i);
-    while (s[i]) {
-        size_t n = utf8_sequence_length(s + i);
-        if (n == 0) {
-            sanitized += '?';
-            i++;
-        } else {
-            sanitized.append(str + i, n);
-            i += n;
-        }
-    }
-    return env->NewStringUTF(sanitized.c_str());
+    // never hand NewString a null pointer, even for an empty string
+    static const jchar empty = 0;
+    const jchar *data = units.empty() ? &empty : units.data();
+    return env->NewString(data, static_cast<jsize>(units.size()));
 }
 
 static std::once_flag init_flag;

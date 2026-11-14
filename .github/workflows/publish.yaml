@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     if: ${{ github.repository == 'midasvo/libmpv-android' }}
+    # two runs for the same tag (a re-pushed tag) must not overlap: queue, never cancel
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write # create the draft GitHub release (the repo default token is read-only)
     steps:
@@ -20,14 +24,16 @@ jobs:
           fetch-depth: 0 # release notes need the merge-base with upstream
 
       # Maven Central releases cannot be undone: only publish clean semver tags
-      # whose commit is on main. FETCH_HEAD is used because a tag checkout may
-      # have no origin/main ref.
+      # whose commit is on main and whose version is not on Maven Central yet
+      # (a moved or re-pushed tag must not touch the release or upload again).
+      # FETCH_HEAD is used because a tag checkout may have no origin/main ref.
       - name: Check tag
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag '$TAG' is not vMAJOR.MINOR.PATCH (for example v1.2.0)"
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if ! [[ "$TAG" =~ $semver ]]; then
+            echo "::error::Tag '$TAG' is not vMAJOR.MINOR.PATCH without leading zeros (for example v1.2.0)"
             exit 1
           fi
           git fetch --quiet origin main
@@ -35,6 +41,21 @@ jobs:
             echo "::error::Tag '$TAG' ($GITHUB_SHA) is not on main; tag a commit that is merged into main"
             exit 1
           fi
+          version="${TAG#v}"
+          pom="https://repo1.maven.org/maven2/io/github/midasvo/libmpv/$version/libmpv-$version.pom"
+          status=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+                        --retry 3 --retry-delay 10 "$pom") || true
+          case "$status" in
+            404) ;;
+            200)
+              echo "::error::Version $version is already on Maven Central; release the next version instead"
+              exit 1
+              ;;
+            *)
+              echo "::error::Could not check whether $version is already on Maven Central (HTTP status '$status' for $pom)"
+              exit 1
+              ;;
+          esac
 
       - name: Setup Java JDK
         uses: actions/setup-java@v6
