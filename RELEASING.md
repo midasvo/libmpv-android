@@ -9,7 +9,8 @@ Keep this list short. Every extra line is a possible merge conflict.
 - `README.md`: the "About this fork" note at the top
 - `libmpv/build.gradle.kts`: `coordinates(...)` and the `pom { }` block. The version comes from `-PVERSION_NAME`.
 - `.github/workflows/publish.yaml`: repository guard, version from the tag, source tarball, release notes
-- `.github/workflows/build.yaml`: `workflow_dispatch` trigger
+- `.github/workflows/build.yaml`: `workflow_dispatch` trigger and download retries (`WGET`)
+- `buildscripts/scripts/mpv.sh`: `-Dbuild-date=false`, so `libmpv.so` is reproducible (worth sending upstream)
 - `.github/workflows/sync-upstream.yaml` and this file
 
 The Kotlin package stays `dev.jdtech.mpv`. Do not rename it.
