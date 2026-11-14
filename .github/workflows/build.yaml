@@ -87,10 +87,14 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: ./gradlew :libmpv:connectedDebugAndroidTest
 
+      # Always uploaded: Gradle does not print the test count, so the report is
+      # the only proof the tests ran on a passing build.
       - name: Upload test report
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: android-test-report
-          path: ./libmpv/build/reports/androidTests/
-          if-no-files-found: ignore
+          path: |
+            ./libmpv/build/reports/androidTests/
+            ./libmpv/build/outputs/androidTest-results/
+          if-no-files-found: warn
