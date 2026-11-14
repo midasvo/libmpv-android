@@ -11,6 +11,7 @@ extern "C" {
     jni_func(jint, nativeSetOptionString, jlong instance, jstring joption, jstring jvalue);
 
     jni_func(jobject, nativeGetPropertyInt, jlong instance, jstring jproperty);
+    jni_func(jobject, nativeGetPropertyLong, jlong instance, jstring jproperty);
     jni_func(void, nativeSetPropertyInt, jlong instance, jstring jproperty, jint jvalue);
     jni_func(jobject, nativeGetPropertyDouble, jlong instance, jstring jproperty);
     jni_func(void, nativeSetPropertyDouble, jlong instance, jstring jproperty, jdouble jvalue);
@@ -78,6 +79,14 @@ jni_func(jobject, nativeGetPropertyInt, jlong instance, jstring jproperty) {
     return env->NewObject(java_Integer, java_Integer_init, (jint)value);
 }
 
+jni_func(jobject, nativeGetPropertyLong, jlong instance, jstring jproperty) {
+    auto mpv_instance = reinterpret_cast<MPVInstance*>(instance);
+    int64_t value = 0;
+    if (common_get_property(env, mpv_instance->mpv, jproperty, MPV_FORMAT_INT64, &value) < 0)
+        return nullptr;
+    return env->NewObject(java_Long, java_Long_init, (jlong)value);
+}
+
 jni_func(jobject, nativeGetPropertyDouble, jlong instance, jstring jproperty) {
     auto mpv_instance = reinterpret_cast<MPVInstance*>(instance);
     double value = 0;
@@ -99,7 +108,7 @@ jni_func(jstring, nativeGetPropertyString, jlong instance, jstring jproperty) {
     char *value;
     if (common_get_property(env, mpv_instance->mpv, jproperty, MPV_FORMAT_STRING, &value) < 0)
         return nullptr;
-    jstring jvalue = env->NewStringUTF(value);
+    jstring jvalue = new_string_utf_safe(env, value);
     mpv_free(value);
     return jvalue;
 }

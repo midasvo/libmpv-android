@@ -8,12 +8,18 @@
 bool acquire_jni_env(JavaVM *vm, JNIEnv **env);
 void init_methods_cache(JNIEnv *env);
 
+// Creates a Java string from standard UTF-8 (supplementary characters as 4-byte
+// sequences, which become surrogate pairs). Unlike NewStringUTF it does not
+// expect Modified UTF-8 and is safe for invalid input: each invalid byte is
+// replaced with '?'. Returns nullptr when str is nullptr.
+jstring new_string_utf_safe(JNIEnv *env, const char *str);
+
 #ifndef UTIL_EXTERN
 #define UTIL_EXTERN extern
 #endif
 
-UTIL_EXTERN jclass java_Integer, java_Double, java_Boolean;
-UTIL_EXTERN jmethodID java_Integer_init, java_Double_init, java_Boolean_init;
+UTIL_EXTERN jclass java_Integer, java_Long, java_Double, java_Boolean;
+UTIL_EXTERN jmethodID java_Integer_init, java_Long_init, java_Double_init, java_Boolean_init;
 
 UTIL_EXTERN jclass mpv_MPVLib;
 UTIL_EXTERN jmethodID mpv_MPVLib_eventProperty_S,
