@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>libmpv for Android: mpv as an AAR on Maven Central</title>
+  <meta name="description" content="libmpv for Android: mpv, FFmpeg and libplacebo built for Android and published to Maven Central as io.github.midasvo:libmpv. A fork of jarnedemeulemeester/libmpv-android that releases on its own schedule, for Ephyra.">
+  <meta name="theme-color" content="#070B16" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F3FBFF" media="(prefers-color-scheme: light)">
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://midasvo.nl/libmpv-android/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="libmpv for Android">
+  <meta property="og:site_name" content="libmpv for Android">
+  <meta property="og:description" content="mpv, FFmpeg and libplacebo for Android, as one dependency from Maven Central.">
+  <meta property="og:url" content="https://midasvo.nl/libmpv-android/">
+  <meta name="twitter:card" content="summary">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "libmpv for Android",
+    "description": "mpv, FFmpeg and libplacebo built for Android and published to Maven Central as io.github.midasvo:libmpv.",
+    "url": "https://midasvo.nl/libmpv-android/",
+    "codeRepository": "https://github.com/midasvo/libmpv-android",
+    "programmingLanguage": ["Kotlin", "C++"],
+    "runtimePlatform": "Android 8.0 or newer",
+    "license": "https://opensource.org/license/mit",
+    "author": { "@type": "Person", "name": "Midas van Oene", "url": "https://midasvo.nl/" },
+    "isBasedOn": "https://github.com/jarnedemeulemeester/libmpv-android"
+  }
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="mark.svg" alt="" width="28" height="28">libmpv for Android</a>
+    <nav aria-label="Sections">
+      <a href="#use">Use it</a>
+      <a class="optional" href="#inside">Inside</a>
+      <a class="optional" href="#why">Why</a>
+      <a class="optional" href="#licence">Licence</a>
+      <a href="https://github.com/midasvo/libmpv-android">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="specks" aria-hidden="true"></div>
+    <div class="wrap">
+      <div class="hero-copy">
+        <img class="hero-mark" src="mark.svg" alt="" width="80" height="80">
+        <h1 id="hero-title">mpv for Android, as one dependency.</h1>
+        <p class="lead">mpv, FFmpeg and libplacebo, built for every Android ABI and published to Maven Central with a small Kotlin wrapper. It's the player engine behind <a href="https://midasvo.nl/ephyra/">Ephyra</a>.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="#use">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></svg>
+            Add it to your app
+          </a>
+          <a class="btn btn-secondary" href="https://github.com/midasvo/libmpv-android">Source on GitHub</a>
+        </div>
+        <p class="meta">Latest: 1.1.0, with mpv 0.42.0 and FFmpeg 9.0.2. GPL-3.0-or-later. Android 8.0 or newer.</p>
+      </div>
+      <div class="panel" aria-label="Example">
+        <p class="label">build.gradle.kts</p>
+<pre><code><span class="k">dependencies</span> {
+    implementation(<span class="s">"io.github.midasvo:libmpv:1.1.0"</span>)
+}</code></pre>
+        <p class="label">Kotlin</p>
+<pre><code><span class="k">import</span> dev.jdtech.mpv.MPVLib
+
+<span class="k">val</span> mpv = MPVLib.create(context) ?: <span class="k">return</span>
+mpv.setOptionString(<span class="s">"gpu-context"</span>, <span class="s">"android"</span>)
+mpv.setOptionString(<span class="s">"hwdec"</span>, <span class="s">"mediacodec"</span>)
+mpv.init()
+
+<span class="c">// once the Surface exists</span>
+mpv.attachSurface(holder.surface)
+mpv.setOptionString(<span class="s">"force-window"</span>, <span class="s">"yes"</span>)
+mpv.setOptionString(<span class="s">"vo"</span>, <span class="s">"gpu"</span>)
+mpv.command(arrayOf(<span class="s">"loadfile"</span>, url))
+
+<span class="c">// when the player goes away</span>
+mpv.destroy()</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="use" aria-labelledby="use-title">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2 id="use-title">Use it</h2>
+        <p>It's on Maven Central, so there's no extra repository to add. One AAR holds the native libraries for <code>arm64-v8a</code>, <code>armeabi-v7a</code>, <code>x86</code> and <code>x86_64</code>, and the Kotlin wrapper <code>MPVLib</code>.</p>
+      </div>
+
+      <div class="cards reveal">
+        <div class="card">
+          <h3>New project</h3>
+<pre><code><span class="c">// settings.gradle.kts: mavenCentral() is usually there already</span>
+<span class="k">dependencies</span> {
+    implementation(<span class="s">"io.github.midasvo:libmpv:1.1.0"</span>)
+}</code></pre>
+          <p>The wrapper creates an mpv instance, attaches it to a <code>Surface</code>, sets options and properties, sends commands, and passes mpv's events and log messages to your observers. Everything else is mpv itself: its <a href="https://mpv.io/manual/stable/">manual</a> is the reference for options, properties and commands.</p>
+        </div>
+        <div class="card">
+          <h3>Coming from <code>dev.jdtech.mpv:libmpv</code></h3>
+          <p>Change the coordinate and nothing else. The Kotlin package stays <code>dev.jdtech.mpv</code>, so your code compiles unchanged. Don't keep both: they ship the same native libraries under the same file names.</p>
+          <p>Two things changed in mpv 0.42 that a player notices:</p>
+          <ul>
+            <li>http(s) goes through libcurl by default. <code>curl-enabled=no</code> brings back FFmpeg's own networking.</li>
+            <li><code>tls-verify</code> defaults to <code>yes</code>, and the build has no CA bundle of its own.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="inside" aria-labelledby="inside-title">
+    <div class="wrap">
+      <div class="split">
+        <div class="section-head reveal">
+          <h2 id="inside-title">What's inside 1.1.0</h2>
+          <p><code>libmpv.so</code> and the FFmpeg libraries are shared libraries. Everything else is statically linked into them.</p>
+          <p>Each release's notes list the exact versions, and every version lives in one file, <a href="https://github.com/midasvo/libmpv-android/blob/main/buildscripts/include/depinfo.sh"><code>depinfo.sh</code></a>. Built with NDK 30 against Android API 37, minimum API 26.</p>
+          <p class="meta">New in 1.1.0: mpv 0.42.0 (was 0.41.0), FFmpeg 9.0.2 (was 8.1), and libplacebo 7.387.0, which fixes AV1 film grain on OpenGL ES.</p>
+        </div>
+        <div class="table-scroll reveal">
+          <table>
+            <thead><tr><th scope="col">Library</th><th scope="col">Version</th><th scope="col">Licence</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">mpv</th><td class="v">0.42.0</td><td>GPL-2.0-or-later</td></tr>
+              <tr><th scope="row">FFmpeg</th><td class="v">9.0.2</td><td>GPL-3.0-or-later</td></tr>
+              <tr><th scope="row">libplacebo</th><td class="v">7.387.0</td><td>LGPL-2.1-or-later</td></tr>
+              <tr><th scope="row">dav1d</th><td class="v">1.5.4</td><td>BSD-2-Clause</td></tr>
+              <tr><th scope="row">libass</th><td class="v">0.17.5</td><td>ISC</td></tr>
+              <tr><th scope="row">curl</th><td class="v">8.23.0</td><td>curl</td></tr>
+              <tr><th scope="row">mbedtls</th><td class="v">3.6.7</td><td>Apache-2.0</td></tr>
+              <tr><th scope="row">harfbuzz</th><td class="v">15.1.0</td><td>Old MIT</td></tr>
+              <tr><th scope="row">freetype</th><td class="v">2.15.0</td><td>FTL or GPL-2.0-or-later</td></tr>
+              <tr><th scope="row">fontconfig</th><td class="v">2.18.3</td><td>fontconfig</td></tr>
+              <tr><th scope="row">fribidi</th><td class="v">1.0.18</td><td>LGPL-2.1-or-later</td></tr>
+              <tr><th scope="row">libunibreak</th><td class="v">8.0</td><td>Zlib</td></tr>
+              <tr><th scope="row">libxml2</th><td class="v">2.15.4</td><td>MIT</td></tr>
+              <tr><th scope="row">lua</th><td class="v">5.2.4</td><td>MIT</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why" aria-labelledby="why-title">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2 id="why-title">Why a fork</h2>
+        <p>This is a fork of <a href="https://github.com/jarnedemeulemeester/libmpv-android">jarnedemeulemeester/libmpv-android</a>, the library Findroid uses. Upstream had already merged mpv 0.42 and FFmpeg 9, but there was no release with them yet, and Ephyra needed the libplacebo fix for AV1 film grain. So this fork publishes its own releases. It follows upstream rather than competing with it.</p>
+      </div>
+
+      <div class="cards three reveal">
+        <div class="card">
+          <h3>Close to upstream</h3>
+          <p>A weekly workflow opens a pull request that merges upstream's <code>main</code>. The fork's own changes are a short list of files, so those merges stay trivial.</p>
+        </div>
+        <div class="card">
+          <h3>Current</h3>
+          <p>Renovate proposes every new version of mpv, FFmpeg and the rest. CI builds all four ABIs on each one before it can be merged.</p>
+        </div>
+        <div class="card">
+          <h3>Tested in a real player</h3>
+          <p>A release goes into Ephyra before anything else. 1.1.0 was played on a phone, on emulators and on a 32-bit Android TV box, including hardware-decoded 10-bit AV1.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="licence" aria-labelledby="licence-title">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2 id="licence-title">Licence and source</h2>
+        <p>The code in the repository is MIT. The AAR is effectively <strong>GPL-3.0-or-later</strong>, because <code>libmpv.so</code> links FFmpeg and other GPL components. An app that ships it has to show the licences and offer the source.</p>
+      </div>
+
+      <div class="cards reveal">
+        <div class="card">
+          <h3>Source with every release</h3>
+          <p>Each <a href="https://github.com/midasvo/libmpv-android/releases">release</a> attaches <code>libmpv-&lt;version&gt;-sources.tar.xz</code>: the repository at the tag plus every dependency as downloaded and patched. Link to it from your app and that part is covered.</p>
+        </div>
+        <div class="card">
+          <h3>Signed and reproducible</h3>
+          <p>Releases are signed with a dedicated key that's published on keys.openpgp.org and keyserver.ubuntu.com. The build leaves the date out of <code>libmpv.so</code>, so two builds of the same tag can be compared byte for byte.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <p>Forked from <a href="https://github.com/jarnedemeulemeester/libmpv-android">libmpv-android</a> by Jarne Demeulemeester, which is based on <a href="https://github.com/mpv-android/mpv-android">mpv-android</a>. Thanks to both, and to the mpv and FFmpeg projects.</p>
+      <p>Maintained by <a href="https://midasvo.nl/">Midas van Oene</a> for <a href="https://midasvo.nl/ephyra/">Ephyra</a>. Report problems with these builds <a href="https://github.com/midasvo/libmpv-android/issues">here</a>, not upstream.</p>
+    </div>
+    <nav aria-label="Links">
+      <a href="https://github.com/midasvo/libmpv-android">Source code</a>
+      <a href="https://github.com/midasvo/libmpv-android/releases">Releases</a>
+      <a href="https://central.sonatype.com/artifact/io.github.midasvo/libmpv">Maven Central</a>
+      <a href="https://github.com/midasvo/libmpv-android/issues">Report a bug</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js" defer></script>
+</body>
+</html>
