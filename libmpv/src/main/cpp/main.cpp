@@ -26,7 +26,7 @@ extern "C" {
     jni_func(jlong, nativeCreate, jobject thiz, jobject appctx);
     jni_func(void, nativeInit, jlong instance);
     jni_func(void, nativeDestroy, jlong instance);
-    jni_func(void, nativeCommand, jlong instance, jobjectArray jarray);
+    jni_func(jint, nativeCommand, jlong instance, jobjectArray jarray);
     jni_func(jint, nativeRequestLogMessages, jlong instance, jstring jlevel);
 };
 
@@ -52,6 +52,8 @@ jni_func(jlong, nativeCreate, jobject thiz, jobject appctx) {
 
     instance->mpv = mpv_create();
     if (!instance->mpv) {
+        env->DeleteGlobalRef(instance->appCtx);
+        env->DeleteGlobalRef(instance->javaObject);
         delete instance;
         return 0;
     }
@@ -105,36 +107,51 @@ jni_func(void, nativeDestroy, jlong instance) {
     delete mpv_instance;
 }
 
-jni_func(void, nativeCommand, jlong instance, jobjectArray jarray) {
+jni_func(jint, nativeCommand, jlong instance, jobjectArray jarray) {
     auto mpv_instance = reinterpret_cast<MPVInstance*>(instance);
     if (!mpv_instance->mpv) {
         ALOGE("Cannot run command: mpv is not initialized");
-        return;
+        return MPV_ERROR_UNINITIALIZED;
     }
 
     const char *arguments[128] = { nullptr };
     jstring stringRefs[128] = { nullptr };
 
-    int len = env->GetArrayLength(jarray);
+    int len = jarray ? env->GetArrayLength(jarray) : 0;
 
-    if (len >= ARRAYLEN(arguments)) {
-        ALOGE("Cannot run command: too many arguments");
-        return;
+    if (!jarray || len >= (int) ARRAYLEN(arguments)) {
+        ALOGE("Cannot run command: no or too many arguments");
+        return MPV_ERROR_INVALID_PARAMETER;
     }
 
+    int result = 0;
     for (int i = 0; i < len; ++i) {
         stringRefs[i] = (jstring)env->GetObjectArrayElement(jarray, i);
+        if (!stringRefs[i]) {
+            ALOGE("Cannot run command: argument %d is null", i);
+            result = MPV_ERROR_INVALID_PARAMETER;
+            break;
+        }
         arguments[i] = env->GetStringUTFChars(stringRefs[i], nullptr);
+        if (!arguments[i]) {
+            // OutOfMemoryError is pending and will be thrown on return
+            result = MPV_ERROR_NOMEM;
+            break;
+        }
     }
 
-    mpv_command(mpv_instance->mpv, arguments);
+    if (result == 0)
+        result = mpv_command(mpv_instance->mpv, arguments);
 
     for (int i = 0; i < len; ++i) {
         if (stringRefs[i]) {
-            env->ReleaseStringUTFChars(stringRefs[i], arguments[i]);
+            if (arguments[i])
+                env->ReleaseStringUTFChars(stringRefs[i], arguments[i]);
             env->DeleteLocalRef(stringRefs[i]);
         }
     }
+
+    return result;
 }
 
 jni_func(jint, nativeRequestLogMessages, jlong instance, jstring jlevel) {

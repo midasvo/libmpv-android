@@ -14,8 +14,10 @@ extern "C" {
 jni_func(void, nativeAttachSurface, jlong instance, jobject surface) {
     auto mpv_instance = reinterpret_cast<MPVInstance*>(instance);
 
+    jobject old_surface = mpv_instance->surface;
     mpv_instance->surface = env->NewGlobalRef(surface);
     if (!mpv_instance->surface) {
+        mpv_instance->surface = old_surface;
         die(env, "invalid surface provided");
         return;
     }
@@ -24,6 +26,11 @@ jni_func(void, nativeAttachSurface, jlong instance, jobject surface) {
     int result = mpv_set_option(mpv_instance->mpv, "wid", MPV_FORMAT_INT64, &wid);
     if (result < 0)
         ALOGE("mpv_set_option(wid) returned error %s", mpv_error_string(result));
+
+    // attached twice without a detach: release the previous surface only
+    // after mpv has been pointed at the new one
+    if (old_surface)
+        env->DeleteGlobalRef(old_surface);
 }
 
 jni_func(void, nativeDetachSurface, jlong instance) {
@@ -33,6 +40,8 @@ jni_func(void, nativeDetachSurface, jlong instance) {
     if (result < 0)
         ALOGE("mpv_set_option(wid) returned error %s", mpv_error_string(result));
 
-    env->DeleteGlobalRef(mpv_instance->surface);
-    mpv_instance->surface = nullptr;
+    if (mpv_instance->surface) {
+        env->DeleteGlobalRef(mpv_instance->surface);
+        mpv_instance->surface = nullptr;
+    }
 }

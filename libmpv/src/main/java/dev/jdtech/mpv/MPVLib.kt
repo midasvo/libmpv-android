@@ -2,12 +2,14 @@ package dev.jdtech.mpv
 
 import android.content.Context
 import android.view.Surface
+import java.util.concurrent.CopyOnWriteArrayList
 
 @Suppress("unused")
 class MPVLib private constructor(nativePtr: Long) {
     private var nativeInstance: Long = 0
-    private val observers = mutableListOf<EventObserver>()
-    private val logObservers = mutableListOf<LogObserver>()
+    // Copy-on-write so observers may add or remove observers from inside a callback.
+    private val observers = CopyOnWriteArrayList<EventObserver>()
+    private val logObservers = CopyOnWriteArrayList<LogObserver>()
 
     companion object {
         init {
@@ -67,11 +69,12 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeDetachSurface(instance: Long)
 
-    fun command(cmd: Array<String>) {
+    /** Runs an mpv command and returns the mpv error code (0 on success, negative on failure). */
+    fun command(cmd: Array<String>): Int {
         checkCreated()
-        nativeCommand(nativeInstance, cmd)
+        return nativeCommand(nativeInstance, cmd)
     }
-    private external fun nativeCommand(instance: Long, cmd: Array<String>)
+    private external fun nativeCommand(instance: Long, cmd: Array<String>): Int
 
     /**
      * Sets the minimum level of mpv log messages delivered to [LogObserver]s
@@ -92,11 +95,19 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeSetOptionString(instance: Long, name: String, value: String): Int
 
+    /** Reads an int64 property truncated to 32 bits (kept for compatibility); use [getPropertyLong] for the full value. */
     fun getPropertyInt(property: String): Int? {
         checkCreated()
         return nativeGetPropertyInt(nativeInstance, property)
     }
     private external fun nativeGetPropertyInt(instance: Long, property: String): Int?
+
+    /** Reads an int64 property without truncation. */
+    fun getPropertyLong(property: String): Long? {
+        checkCreated()
+        return nativeGetPropertyLong(nativeInstance, property)
+    }
+    private external fun nativeGetPropertyLong(instance: Long, property: String): Long?
 
     fun setPropertyInt(property: String, value: Int) {
         checkCreated()
@@ -147,76 +158,54 @@ class MPVLib private constructor(nativePtr: Long) {
     private external fun nativeObserveProperty(instance: Long, property: String, format: Int)
 
     fun addObserver(o: EventObserver) {
-        synchronized(observers) {
-            observers.add(o)
-        }
+        observers.add(o)
     }
 
     fun removeObserver(o: EventObserver) {
-        synchronized(observers) {
-            observers.remove(o)
-        }
+        observers.remove(o)
     }
 
     fun eventProperty(property: String, value: Long) {
-        synchronized(observers) {
-            for (o in observers)
-                o.eventProperty(property, value)
-        }
+        for (o in observers)
+            o.eventProperty(property, value)
     }
 
     fun eventProperty(property: String, value: Double) {
-        synchronized(observers) {
-            for (o in observers)
-                o.eventProperty(property, value)
-        }
+        for (o in observers)
+            o.eventProperty(property, value)
     }
 
     fun eventProperty(property: String, value: Boolean) {
-        synchronized(observers) {
-            for (o in observers)
-                o.eventProperty(property, value)
-        }
+        for (o in observers)
+            o.eventProperty(property, value)
     }
 
     fun eventProperty(property: String, value: String) {
-        synchronized(observers) {
-            for (o in observers)
-                o.eventProperty(property, value)
-        }
+        for (o in observers)
+            o.eventProperty(property, value)
     }
 
     fun eventProperty(property: String) {
-        synchronized(observers) {
-            for (o in observers)
-                o.eventProperty(property)
-        }
+        for (o in observers)
+            o.eventProperty(property)
     }
 
     fun event(eventId: Int) {
-        synchronized(observers) {
-            for (o in observers)
-                o.event(eventId)
-        }
+        for (o in observers)
+            o.event(eventId)
     }
 
     fun addLogObserver(o: LogObserver) {
-        synchronized(logObservers) {
-            logObservers.add(o)
-        }
+        logObservers.add(o)
     }
 
     fun removeLogObserver(o: LogObserver) {
-        synchronized(logObservers) {
-            logObservers.remove(o)
-        }
+        logObservers.remove(o)
     }
 
     fun logMessage(prefix: String, level: Int, text: String) {
-        synchronized(logObservers) {
-            for (o in logObservers)
-                o.logMessage(prefix, level, text)
-        }
+        for (o in logObservers)
+            o.logMessage(prefix, level, text)
     }
 
     interface EventObserver {

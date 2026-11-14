@@ -15,6 +15,8 @@ before running the script, it will still install the necessary SDK packages.
 
 A matching NDK version inside the SDK will be picked up automatically or downloaded/installed otherwise.
 
+The dependencies fetched as release tarballs (lua, curl, libunibreak) are verified against SHA-256 checksums kept next to their versions in `include/depinfo.sh` (`sha256_*`); when you bump one of those versions, update its checksum too. `gas-preprocessor` is pinned to a commit (`v_gas_preprocessor`) in the same file.
+
 ## Patching
 
 ```shell
@@ -87,13 +89,13 @@ Afterwards, build mpv-android:
 
 ## Using Android Studio
 
-You can use Android Studio to develop the Java part of the codebase. Before using it, make sure to build the project at least once by following the steps in the **Build** section.
+You can use Android Studio to develop the Kotlin part of the codebase. Before using it, make sure to build the project at least once by following the steps in the **Build** section.
 
-You should point Android Studio to existing SDK installation at `mpv-android/buildscripts/sdk/android-sdk-linux`. Then click "Open an existing Android Studio project" and select `mpv-android`.
+You should point Android Studio to existing SDK installation at `libmpv-android/buildscripts/sdk/android-sdk-linux`. Then click "Open an existing Android Studio project" and select the repository root (`libmpv-android`). The library module is `libmpv`.
 
-If Android Studio complains about project sync failing (`Error:Exception thrown while executing model rule: NdkComponentModelPlugin.Rules#createNativeBuildModel`), go to "File -> Project Structure -> SDK Location" and set "Android NDK Location" to `mpv-android/buildscripts/sdk/android-ndk-rVERSION`.
+If Android Studio complains about project sync failing to find the NDK, go to "File -> Project Structure -> SDK Location" and set "Android NDK Location" to `libmpv-android/buildscripts/sdk/android-sdk-linux/ndk/<version>` (the version is `v_ndk` in `buildscripts/include/depinfo.sh`).
 
-Note that if you build from Android Studio only the Java part will be built. If you make any changes to libraries (ffmpeg, mpv, ...) or mpv-android native code (`app/src/main/jni/*`), first rebuild native code with:
+Note that if you build from Android Studio only the Kotlin part and the JNI wrapper are built. If you make any changes to libraries (ffmpeg, mpv, ...) or the native wrapper code (`libmpv/src/main/cpp/*`), first rebuild native code with:
 
 ```shell
 ./build.sh -n
@@ -101,23 +103,17 @@ Note that if you build from Android Studio only the Java part will be built. If 
 
 then build the project from Android Studio.
 
-Also, debugging native code does not work from within the studio at the moment, you will have to use gdb for that.
+Also, debugging native code does not work from within the studio at the moment.
 
-## Debugging native code with gdb
+## Verifying the AAR
 
-You first need to rebuild mpv-android with gdbserver support:
-
-```shell
-NDK_DEBUG=1 ./build.sh -n
-adb install -r ../app/build/outputs/apk/debug/app-debug.apk
-```
-
-After that, ndk-gdb can be used to debug the app:
+After building the AAR, `check-aar.sh` checks it:
 
 ```shell
-cd mpv-android/app/src/main/
-../../../buildscripts/sdk/android-ndk-r*/ndk-gdb --launch
+./check-aar.sh [path-to-aar]   # default: libmpv/build/outputs/aar/libmpv-release.aar
 ```
+
+It fails with a list of every problem if an ABI is missing one of the expected libraries (`libmpv.so`, `libplayer.so`, the FFmpeg libraries, `libc++_shared.so`) or has an empty one, or if a 64-bit `.so` has `LOAD` segments aligned below 16 KiB (needed for 16 KiB page size devices). On success it prints the file count and size per ABI. It needs `unzip` and `readelf` (or `llvm-readelf`).
 
 # Credits, notes, etc
 

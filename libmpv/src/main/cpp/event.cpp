@@ -7,9 +7,22 @@
 #include "log.h"
 
 
+// An exception thrown by a Java observer must not stay pending: making further
+// JNI calls with a pending exception is undefined behaviour. Log and clear it.
+static void clearJavaException(JNIEnv *env) {
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+    }
+}
+
 static void sendPropertyUpdateToJava(JNIEnv *env, MPVInstance* instance, mpv_event_property *prop) {
-    jstring jprop = env->NewStringUTF(prop->name);
+    jstring jprop = new_string_utf_safe(env, prop->name);
     jstring jvalue = nullptr;
+    if (!jprop) {
+        clearJavaException(env);
+        return;
+    }
     switch (prop->format) {
     case MPV_FORMAT_NONE:
         env->CallVoidMethod(instance->javaObject, mpv_MPVLib_eventProperty_S, jprop);
@@ -24,13 +37,15 @@ static void sendPropertyUpdateToJava(JNIEnv *env, MPVInstance* instance, mpv_eve
         env->CallVoidMethod(instance->javaObject, mpv_MPVLib_eventProperty_Sd, jprop, *(double*)prop->data);
         break;
     case MPV_FORMAT_STRING:
-        jvalue = env->NewStringUTF(*(const char**)prop->data);
-        env->CallVoidMethod(instance->javaObject, mpv_MPVLib_eventProperty_SS, jprop, jvalue);
+        jvalue = new_string_utf_safe(env, *(const char**)prop->data);
+        if (jvalue)
+            env->CallVoidMethod(instance->javaObject, mpv_MPVLib_eventProperty_SS, jprop, jvalue);
         break;
     default:
         ALOGV("sendPropertyUpdateToJava: Unknown property update format received in callback: %d!", prop->format);
         break;
     }
+    clearJavaException(env);
     if (jprop)
         env->DeleteLocalRef(jprop);
     if (jvalue)
@@ -39,23 +54,19 @@ static void sendPropertyUpdateToJava(JNIEnv *env, MPVInstance* instance, mpv_eve
 
 static void sendEventToJava(JNIEnv *env, MPVInstance* instance, int event) {
     env->CallVoidMethod(instance->javaObject, mpv_MPVLib_event, event);
+    clearJavaException(env);
 }
 
 static void sendLogMessageToJava(JNIEnv *env, MPVInstance* instance, mpv_event_log_message *msg) {
-    // filter the most obvious cases of invalid utf-8, since Java would choke on it
-    const auto invalid_utf8 = [] (unsigned char c) {
-        return c == 0xc0 || c == 0xc1 || c >= 0xf5;
-    };
-    for (int i = 0; msg->text[i]; i++) {
-        if (invalid_utf8(static_cast<unsigned char>(msg->text[i])))
-            return;
+    // invalid utf-8 (which NewStringUTF would choke on) is replaced with '?'
+    jstring jprefix = new_string_utf_safe(env, msg->prefix);
+    jstring jtext = jprefix ? new_string_utf_safe(env, msg->text) : nullptr;
+
+    if (jprefix && jtext) {
+        env->CallVoidMethod(instance->javaObject, mpv_MPVLib_logMessage_SiS,
+            jprefix, (jint) msg->log_level, jtext);
     }
-
-    jstring jprefix = env->NewStringUTF(msg->prefix);
-    jstring jtext = env->NewStringUTF(msg->text);
-
-    env->CallVoidMethod(instance->javaObject, mpv_MPVLib_logMessage_SiS,
-        jprefix, (jint) msg->log_level, jtext);
+    clearJavaException(env);
 
     if (jprefix)
         env->DeleteLocalRef(jprefix);

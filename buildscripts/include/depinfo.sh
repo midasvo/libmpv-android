@@ -20,8 +20,18 @@ v_mbedtls=3.6.7
 v_libplacebo=7.387.0
 v_dav1d=1.5.4
 v_ffmpeg=9.0.2
-v_curl=8.23.0
+v_curl=8_23_0
 v_mpv=0.42.0
+
+# Pinned commit of FFmpeg/gas-preprocessor (used by download-sdk.sh)
+v_gas_preprocessor=ac1836309c2e77023c228b7184485597286289d3
+
+## SHA-256 of the release tarballs (verified by download-deps.sh).
+## Update by hand together with the matching version above.
+
+sha256_lua=b9e2e4aad6789b3b63a056d442f7b39f0ecfca3ae0f1fc0ae4e9614401b69f4b
+sha256_libunibreak=9c4fad6e517338a098373acc9f35579ae2c325e6446666fb9ac2666ba15ceba4
+sha256_curl=e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49
 
 
 ## Dependency tree
