@@ -12,6 +12,7 @@ Keep this list short. Every extra line is a possible merge conflict.
 - `.github/workflows/build.yaml`: `workflow_dispatch` trigger and download retries (`WGET`)
 - `buildscripts/scripts/mpv.sh`: `-Dbuild-date=false`, so `libmpv.so` is reproducible (worth sending upstream)
 - `.github/workflows/sync-upstream.yaml`, `docs/adr/` and this file
+- `site/` and `.github/workflows/pages.yaml`: the landing page at <https://midasvo.nl/libmpv-android/>. Update its version table and snippets when you cut a release.
 
 The Kotlin package stays `dev.jdtech.mpv`. Do not rename it: see [ADR 0001](docs/adr/0001-keep-the-kotlin-package.md).
 
