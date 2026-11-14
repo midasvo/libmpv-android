@@ -2,7 +2,7 @@ name: Pages
 
 # Publishes site/ to GitHub Pages at https://midasvo.nl/libmpv-android/ (the custom domain of
 # midasvo.github.io). Needs Settings → Pages → Source set to "GitHub Actions". Fork-only: upstream
-# has no site/, and the guard keeps this from running anywhere else.
+# has no site/, and the guard keeps this from running anywhere else. Only main deploys, also by hand.
 
 on:
   workflow_dispatch:
@@ -25,7 +25,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy site
-    if: github.repository == 'midasvo/libmpv-android'
+    if: github.repository == 'midasvo/libmpv-android' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

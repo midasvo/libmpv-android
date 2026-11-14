@@ -25,7 +25,7 @@
     "codeRepository": "https://github.com/midasvo/libmpv-android",
     "programmingLanguage": ["Kotlin", "C++"],
     "runtimePlatform": "Android 8.0 or newer",
-    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "license": "https://opensource.org/license/mit",
     "author": { "@type": "Person", "name": "Midas van Oene", "url": "https://midasvo.nl/" },
     "isBasedOn": "https://github.com/jarnedemeulemeester/libmpv-android"
   }
@@ -74,12 +74,18 @@
 <pre><code><span class="k">import</span> dev.jdtech.mpv.MPVLib
 
 <span class="k">val</span> mpv = MPVLib.create(context) ?: <span class="k">return</span>
-mpv.setOptionString(<span class="s">"vo"</span>, <span class="s">"gpu"</span>)
 mpv.setOptionString(<span class="s">"gpu-context"</span>, <span class="s">"android"</span>)
 mpv.setOptionString(<span class="s">"hwdec"</span>, <span class="s">"mediacodec"</span>)
 mpv.init()
+
+<span class="c">// once the Surface exists</span>
 mpv.attachSurface(holder.surface)
-mpv.command(arrayOf(<span class="s">"loadfile"</span>, url))</code></pre>
+mpv.setOptionString(<span class="s">"force-window"</span>, <span class="s">"yes"</span>)
+mpv.setOptionString(<span class="s">"vo"</span>, <span class="s">"gpu"</span>)
+mpv.command(arrayOf(<span class="s">"loadfile"</span>, url))
+
+<span class="c">// when the player goes away</span>
+mpv.destroy()</code></pre>
       </div>
     </div>
   </section>
@@ -134,7 +140,7 @@ mpv.command(arrayOf(<span class="s">"loadfile"</span>, url))</code></pre>
               <tr><th scope="row">curl</th><td class="v">8.23.0</td><td>curl</td></tr>
               <tr><th scope="row">mbedtls</th><td class="v">3.6.7</td><td>Apache-2.0</td></tr>
               <tr><th scope="row">harfbuzz</th><td class="v">15.1.0</td><td>Old MIT</td></tr>
-              <tr><th scope="row">freetype</th><td class="v">2.15.0</td><td>FTL or GPL-2.0</td></tr>
+              <tr><th scope="row">freetype</th><td class="v">2.15.0</td><td>FTL or GPL-2.0-or-later</td></tr>
               <tr><th scope="row">fontconfig</th><td class="v">2.18.3</td><td>fontconfig</td></tr>
               <tr><th scope="row">fribidi</th><td class="v">1.0.18</td><td>LGPL-2.1-or-later</td></tr>
               <tr><th scope="row">libunibreak</th><td class="v">8.0</td><td>Zlib</td></tr>
