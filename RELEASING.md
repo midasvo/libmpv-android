@@ -37,7 +37,11 @@ The usual conflict is upstream bumping `version = "x.y.z"` in `coordinates(...)`
 
 ### Renovate
 
-Upstream already runs Renovate on `buildscripts/include/depinfo.sh`, and its bumps reach us through the sync. Renovate is **not** enabled on this fork, to avoid duplicate PRs and conflicts. When we need a version sooner than upstream (as with libplacebo for midasvo/ephyra#652), bump it here by hand in a PR. Upstream's identical bump will then merge without a conflict.
+Renovate runs on this fork with upstream's `renovate.json` as it is (the custom managers for `depinfo.sh`, plus `config:recommended`). Don't edit that file here: it is upstream's, and every change would be a merge conflict. Upstream runs the same config, so most bumps arrive twice: once from Renovate here, once through the sync PR.
+
+- **The same version on both sides** merges without a conflict, whichever lands first.
+- **Different versions** (Renovate here is a release ahead) conflict on one line of `depinfo.sh`: keep the higher one.
+- **Review Renovate PRs here like any change:** CI builds all four ABIs. A bump of mpv, FFmpeg or libplacebo is a release candidate, so read its notes for the player (see Ephyra's `libmpv-release` skill).
 
 ## Cutting a release
 
@@ -70,8 +74,10 @@ The `release` environment holds:
 
 The signing key is a dedicated RSA-4096 key with the user ID `libmpv-android release signing (midasvo)` and a three-year expiry. It is published on keyserver.ubuntu.com and keys.openpgp.org; `gpg --keyserver hkps://keyserver.ubuntu.com --search-keys "libmpv-android release signing"` shows the fingerprint and expiry. The private key, passphrase and revocation certificate are kept offline by the maintainer, not in this repository.
 
-When generating a key on Windows, strip `` as well as `
-` from generated passphrases: Git Bash's MinGW `openssl` ends its output with CRLF, and a passphrase ending in `` does not survive the trip into an Actions secret (signing then fails with `checksum mismatch`).
+When generating a key on Windows, strip `
+` as well as `
+` from generated passphrases: Git Bash's MinGW `openssl` ends its output with CRLF, and a passphrase ending in `
+` does not survive the trip into an Actions secret (signing then fails with `checksum mismatch`).
 
 **Rotating the key:** create a new key, upload the public key to both keyservers, and replace the three `SIGNING_*` secrets. Old releases stay valid. To extend instead, run `gpg --quick-set-expire <fpr> 3y`, then re-upload the public key and re-export `SIGNING_KEY`. If the key leaks, publish the revocation certificate to the keyservers and rotate.
 
