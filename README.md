@@ -2,7 +2,12 @@
 
 > [!NOTE]
 > **About this fork.** This is [midasvo/libmpv-android](https://github.com/midasvo/libmpv-android), a fork of [jarnedemeulemeester/libmpv-android](https://github.com/jarnedemeulemeester/libmpv-android) that publishes its own releases as `io.github.midasvo:libmpv` for [Ephyra](https://github.com/midasvo/ephyra), so a libmpv update does not have to wait for an upstream release ([midasvo/ephyra#654](https://github.com/midasvo/ephyra/issues/654)).
-> `main` follows upstream; the fork only changes the Maven coordinates, the release workflow and this note. The Kotlin package stays `dev.jdtech.mpv`. Report problems with these builds [here](https://github.com/midasvo/libmpv-android/issues), not upstream.
+>
+> - **Use it:** `implementation("io.github.midasvo:libmpv:1.1.0")` from Maven Central ([releases](https://github.com/midasvo/libmpv-android/releases)). The Kotlin package stays `dev.jdtech.mpv`, so code written for `dev.jdtech.mpv:libmpv` works unchanged.
+> - **Staying current:** Renovate bumps the dependencies in `depinfo.sh` here, and a weekly workflow opens a PR that merges upstream's `main`. The fork differs from upstream only in the files listed in [RELEASING.md](RELEASING.md).
+> - **Source with every release:** each release attaches its complete corresponding source (`libmpv-<version>-sources.tar.xz`).
+>
+> Report problems with these builds [here](https://github.com/midasvo/libmpv-android/issues), not upstream.
 
 Based on [mpv-android](https://github.com/mpv-android/mpv-android)
 
