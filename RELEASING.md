@@ -68,7 +68,10 @@ The `release` environment holds:
 | `SIGNING_KEY_ID` | Last 8 hex digits of the fingerprint |
 | `SIGNING_PASSWORD` | Key passphrase |
 
-The signing key is a dedicated RSA-4096 key, `C0F8 EE6F A659 CB43 851C CDF9 3067 A75D 31D7 B8E4`, created 2026-11-13 and **expiring 2029-11-12**. It is published on keyserver.ubuntu.com and keys.openpgp.org. The private key, passphrase and revocation certificate are kept offline by the maintainer, not in this repository.
+The signing key is a dedicated RSA-4096 key with the user ID `libmpv-android release signing (midasvo)` and a three-year expiry. It is published on keyserver.ubuntu.com and keys.openpgp.org; `gpg --keyserver hkps://keyserver.ubuntu.com --search-keys "libmpv-android release signing"` shows the fingerprint and expiry. The private key, passphrase and revocation certificate are kept offline by the maintainer, not in this repository.
+
+When generating a key on Windows, strip `` as well as `
+` from generated passphrases: Git Bash's MinGW `openssl` ends its output with CRLF, and a passphrase ending in `` does not survive the trip into an Actions secret (signing then fails with `checksum mismatch`).
 
 **Rotating the key:** create a new key, upload the public key to both keyservers, and replace the three `SIGNING_*` secrets. Old releases stay valid. To extend instead, run `gpg --quick-set-expire <fpr> 3y`, then re-upload the public key and re-export `SIGNING_KEY`. If the key leaks, publish the revocation certificate to the keyservers and rotate.
 
