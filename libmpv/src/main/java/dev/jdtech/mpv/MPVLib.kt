@@ -70,8 +70,13 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeDetachSurface(instance: Long)
 
+    /** Runs an mpv command. Use [commandWithResult] to get the mpv error code. */
+    fun command(cmd: Array<String>) {
+        commandWithResult(cmd)
+    }
+
     /** Runs an mpv command and returns the mpv error code (0 on success, negative on failure). */
-    fun command(cmd: Array<String>): Int {
+    fun commandWithResult(cmd: Array<String>): Int {
         checkCreated()
         return nativeCommand(nativeInstance, cmd)
     }

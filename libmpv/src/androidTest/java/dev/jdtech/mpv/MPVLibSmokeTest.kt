@@ -42,8 +42,9 @@ class MPVLibSmokeTest {
             assertFalse(version!!.isEmpty())
 
             // loadfile without its required argument must fail
-            assertTrue(mpv.command(arrayOf("loadfile")) < 0)
-            assertEquals(0, mpv.command(arrayOf("stop")))
+            assertTrue(mpv.commandWithResult(arrayOf("loadfile")) < 0)
+            assertEquals(0, mpv.commandWithResult(arrayOf("stop")))
+            mpv.command(arrayOf("stop")) // the Unit-returning form must keep working
         } finally {
             mpv.destroy()
         }
