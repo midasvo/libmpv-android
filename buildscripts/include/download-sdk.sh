@@ -4,7 +4,7 @@
 
 . ./include/path.sh # load $os var
 
-[ -z "$IN_CI" ] && TRAVIS=0 # skip steps not required for CI?
+[ -z "$IN_CI" ] && IN_CI=0 # skip steps not required for CI?
 [ -z "$WGET" ] && WGET=wget # possibility of calling wget differently
 
 if [ "$os" == "linux" ]; then
@@ -14,10 +14,11 @@ if [ "$os" == "linux" ]; then
 			python3-pip python3-setuptools unzip wget gperf;
 			python3 -m pip install meson jsonschema jinja2; }
 		apt-get -v &>/dev/null && {
-		    sudo apt-get update;
+			sudo apt-get update;
 			sudo apt-get install -y autoconf pkg-config libtool ninja-build nasm \
-			python3-pip python3-setuptools unzip python3-jinja2; }
-			python -m pip install meson
+			python3-pip python3-setuptools unzip python3-jinja2 gperf wget;
+			python3 -m pip install meson ||
+				python3 -m pip install --break-system-packages meson; }
 	fi
 
 	if ! javac -version &>/dev/null; then
@@ -68,7 +69,7 @@ echo y | sdkmanager \
 
 # gas-preprocessor
 mkdir -p bin
-$WGET "https://github.com/FFmpeg/gas-preprocessor/raw/master/gas-preprocessor.pl" \
+$WGET "https://github.com/FFmpeg/gas-preprocessor/raw/${v_gas_preprocessor}/gas-preprocessor.pl" \
 	-O bin/gas-preprocessor.pl
 chmod +x bin/gas-preprocessor.pl
 
