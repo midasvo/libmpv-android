@@ -104,8 +104,39 @@ jobs:
         working-directory: ./buildscripts
         run: ./build.sh
 
+      # The AAR from this step is the one that ships: it is checked, attached
+      # to the release and uploaded to Maven Central. build.sh's own AAR is not
+      # used: Gradle runs there with build.sh's environment, so a run here
+      # recompiles the wrapper (libplayer.so gets a different build ID).
+      - name: Bundle and sign
+        run: |
+          ./gradlew signMavenPublication --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
+          aar=libmpv/build/outputs/aar/libmpv-release.aar
+          if [ ! -f "$aar.asc" ]; then
+            echo "::error::No signature found next to $aar"
+            find libmpv/build -name '*.asc'
+            exit 1
+          fi
+          cp "$aar.asc" "$RUNNER_TEMP/libmpv-${GITHUB_REF_NAME#v}.aar.asc"
+          echo "AAR_SHA256=$(sha256sum "$aar" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+
       - name: Check AAR
         run: ./buildscripts/check-aar.sh
+
+      # The upload runs Gradle again. Before anything is published, make sure
+      # a fresh run reuses the signed AAR instead of building a different one.
+      - name: Check the AAR is reproducible
+        run: |
+          ./gradlew bundleReleaseAar --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
+          actual=$(sha256sum libmpv/build/outputs/aar/libmpv-release.aar | cut -d' ' -f1)
+          if [ "$actual" != "$AAR_SHA256" ]; then
+            echo "::error::A second Gradle run built a different AAR ($actual, signed one is $AAR_SHA256); the upload would not match the release"
+            exit 1
+          fi
 
       - name: Write release notes
         run: |
@@ -135,13 +166,20 @@ jobs:
           body_path: release-notes.md
           files: |
             ./libmpv/build/outputs/aar/libmpv-release.aar
+            ${{ runner.temp }}/libmpv-*.aar.asc
             ${{ runner.temp }}/libmpv-*-sources.tar.xz
 
       # Last on purpose: the upload to Maven Central cannot be undone, so
       # everything that can fail (checks, notes, the release with the GPL
       # source) comes first.
       - name: Publish to Maven Central
-        run: ./gradlew publishToMavenCentral --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
+        run: |
+          ./gradlew publishToMavenCentral --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
+          actual=$(sha256sum libmpv/build/outputs/aar/libmpv-release.aar | cut -d' ' -f1)
+          if [ "$actual" != "$AAR_SHA256" ]; then
+            echo "::error::The uploaded AAR ($actual) is not the one on the draft release ($AAR_SHA256). Replace the release's AAR and .asc with the files from repo1.maven.org before publishing the release."
+            exit 1
+          fi
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.OSSRH_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.OSSRH_PASSWORD }}

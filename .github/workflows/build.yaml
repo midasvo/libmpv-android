@@ -70,6 +70,21 @@ jobs:
           name: libmpv-release.aar
           path: ./libmpv/build/outputs/aar/libmpv-release.aar
 
+      # publish.yaml signs the AAR in one Gradle run and uploads it in the
+      # next, so the release asset is only the uploaded file if a second run
+      # reuses the first one's AAR. Check that here, before a tag relies on it.
+      - name: Check the AAR is reproducible
+        run: |
+          aar=libmpv/build/outputs/aar/libmpv-release.aar
+          ./gradlew bundleReleaseAar --no-configuration-cache -PVERSION_NAME=0.0.0-ci
+          first=$(sha256sum "$aar" | cut -d' ' -f1)
+          ./gradlew bundleReleaseAar --no-configuration-cache -PVERSION_NAME=0.0.0-ci
+          second=$(sha256sum "$aar" | cut -d' ' -f1)
+          if [ "$first" != "$second" ]; then
+            echo "::error::Two Gradle runs built different AARs ($first, $second); publish.yaml would attach one and upload the other"
+            exit 1
+          fi
+
       # Smoke test: load libmpv on an x86_64 emulator. jniLibs is already
       # filled by the build step.
       - name: Enable KVM

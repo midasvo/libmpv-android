@@ -10,8 +10,8 @@ Keep this list short. Every extra line is a possible merge conflict.
 - `libmpv/build.gradle.kts`: `coordinates(...)` and the `pom { }` block (the version comes from `-PVERSION_NAME`), plus the androidTest setup
 - `gradle/libs.versions.toml` and `libmpv/src/androidTest`: instrumented smoke test
 - `libmpv/src/main/cpp` (the JNI wrapper) and `MPVLib.kt`: observer exception safety, UTF-8 sanitising, `commandWithResult()` (returns the mpv error code; `command()` stays `Unit` for binary compatibility), `getPropertyLong`, leak fixes
-- `.github/workflows/publish.yaml`: repository guard, tag guard, version from the tag, AAR check, draft release before the Maven Central upload, source tarball, release notes
-- `.github/workflows/build.yaml`: `workflow_dispatch` trigger, download retries (`WGET`), AAR check, emulator smoke test
+- `.github/workflows/publish.yaml`: repository guard, tag guard, version from the tag, one signed AAR for both the release and Maven Central (with a reproducibility check), AAR check, draft release before the Maven Central upload, source tarball, release notes
+- `.github/workflows/build.yaml`: `workflow_dispatch` trigger, download retries (`WGET`), AAR check, AAR reproducibility check, emulator smoke test
 - `buildscripts/scripts/mpv.sh`: `-Dbuild-date=false`, so `libmpv.so` is reproducible (worth sending upstream)
 - `buildscripts/include/depinfo.sh`, `download-deps.sh`, `download-sdk.sh`: curl version format (`8_23_0`), sha256-verified tarballs, pinned gas-preprocessor, local-setup fix
 - `renovate.json`: one added manager for curl
@@ -63,7 +63,7 @@ Versions are our own semver, starting at `1.1.0`. Raise the minor version for de
    git tag -a v1.2.0 -m "libmpv 1.2.0"
    git push origin v1.2.0
    ```
-3. `publish.yaml` runs in the `release` environment (only `v*` tags can deploy). It refuses tags that are not `vX.Y.Z` or whose commit is not contained in `main`, and versions that are already on Maven Central. It builds all four ABIs (about 25 minutes) and runs the AAR check (`buildscripts/check-aar.sh`) first. It then creates the **draft** GitHub release with the AAR, `libmpv-<version>-sources.tar.xz` and generated notes, and only after that signs and uploads to Maven Central with automatic release.
+3. `publish.yaml` runs in the `release` environment (only `v*` tags can deploy). It refuses tags that are not `vX.Y.Z` or whose commit is not contained in `main`, and versions that are already on Maven Central. It builds all four ABIs (about 25 minutes), then bundles and signs the AAR, runs the AAR check (`buildscripts/check-aar.sh`) on it, and checks that a second Gradle run rebuilds the same file. It then creates the **draft** GitHub release with that AAR, its `.asc`, `libmpv-<version>-sources.tar.xz` and generated notes, and only after that uploads to Maven Central with automatic release. It fails if the uploaded AAR is not the one on the draft release (until 1.2.0 they differed: the upload recompiled the wrapper).
 4. Check the deployment on [central.sonatype.com → Deployments](https://central.sonatype.com/publishing/deployments). It appears on `repo1.maven.org` within about 30 minutes, and in search later.
 5. Check the draft release notes, add what changed for the player, and publish the release.
 6. Bump Ephyra: `libmpv` in `gradle/libs.versions.toml`, then run `docs/mpv-checklist.md`.
