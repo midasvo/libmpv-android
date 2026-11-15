@@ -63,12 +63,12 @@
           </a>
           <a class="btn btn-secondary" href="https://github.com/midasvo/libmpv-android">Source on GitHub</a>
         </div>
-        <p class="meta">Latest: 1.1.0, with mpv 0.42.0 and FFmpeg 9.0.2. GPL-3.0-or-later. Android 8.0 or newer.</p>
+        <p class="meta">Latest: 1.2.0, with mpv 0.42.0 and FFmpeg 9.0.2. GPL-3.0-or-later. Android 8.0 or newer.</p>
       </div>
       <div class="panel" aria-label="Example">
         <p class="label">build.gradle.kts</p>
 <pre><code><span class="k">dependencies</span> {
-    implementation(<span class="s">"io.github.midasvo:libmpv:1.1.0"</span>)
+    implementation(<span class="s">"io.github.midasvo:libmpv:1.2.0"</span>)
 }</code></pre>
         <p class="label">Kotlin</p>
 <pre><code><span class="k">import</span> dev.jdtech.mpv.MPVLib
@@ -102,7 +102,7 @@ mpv.destroy()</code></pre>
           <h3>New project</h3>
 <pre><code><span class="c">// settings.gradle.kts: mavenCentral() is usually there already</span>
 <span class="k">dependencies</span> {
-    implementation(<span class="s">"io.github.midasvo:libmpv:1.1.0"</span>)
+    implementation(<span class="s">"io.github.midasvo:libmpv:1.2.0"</span>)
 }</code></pre>
           <p>The wrapper creates an mpv instance, attaches it to a <code>Surface</code>, sets options and properties, sends commands, and passes mpv's events and log messages to your observers. Everything else is mpv itself: its <a href="https://mpv.io/manual/stable/">manual</a> is the reference for options, properties and commands.</p>
         </div>
@@ -123,10 +123,10 @@ mpv.destroy()</code></pre>
     <div class="wrap">
       <div class="split">
         <div class="section-head reveal">
-          <h2 id="inside-title">What's inside 1.1.0</h2>
+          <h2 id="inside-title">What's inside 1.2.0</h2>
           <p><code>libmpv.so</code> and the FFmpeg libraries are shared libraries. Everything else is statically linked into them.</p>
           <p>Each release's notes list the exact versions, and every version lives in one file, <a href="https://github.com/midasvo/libmpv-android/blob/main/buildscripts/include/depinfo.sh"><code>depinfo.sh</code></a>. Built with NDK 30 against Android API 37, minimum API 26.</p>
-          <p class="meta">New in 1.1.0: mpv 0.42.0 (was 0.41.0), FFmpeg 9.0.2 (was 8.1), and libplacebo 7.387.0, which fixes AV1 film grain on OpenGL ES.</p>
+          <p class="meta">New in 1.2.0: the same libraries as 1.1.0, with a sturdier wrapper. <code>commandWithResult()</code> returns mpv's error code, <code>getPropertyLong()</code> reads 64-bit properties in full, an observer that throws no longer stops the others, and invalid UTF-8 from mpv no longer crashes the app.</p>
         </div>
         <div class="table-scroll reveal">
           <table>
