@@ -20,18 +20,18 @@ The AAR bundles the following native libraries, which are built by the [buildscr
 | Library | Version | License |
 | ------- | ------- | ------- |
 | mpv | 0.42.0 | GPL-2.0-or-later |
-| FFmpeg | 9.0.2 | GPL-3.0-or-later |
+| FFmpeg | 9.1 | GPL-3.0-or-later |
 | libplacebo | 7.387.0 | LGPL-2.1-or-later |
 | libass | 0.17.5 | ISC |
 | lua | 5.2.4 | MIT |
 | curl | 8.23.0 | curl license (MIT-like) |
-| mbedtls | 3.6.7 | Apache-2.0 |
+| mbedtls | 3.6.8 | Apache-2.0 |
 | freetype | 2.15.0 | FreeType License (FTL) or GPL-2.0-or-later |
-| fontconfig | 2.18.3 | fontconfig license (permissive) |
+| fontconfig | 2.18.4 | fontconfig license (permissive) |
 | fribidi | 1.0.18 | LGPL-2.1-or-later |
-| harfbuzz | 15.1.0 | Old MIT |
+| harfbuzz | 15.2.0 | Old MIT |
 | libunibreak | 8.0 | Zlib |
-| dav1d | 1.5.4 | BSD-2-Clause |
+| dav1d | 1.5.5 | BSD-2-Clause |
 | libxml2 | 2.15.4 | MIT |
 
 `libmpv.so` and the FFmpeg libraries are bundled as shared libraries, the remaining libraries are statically linked into them. Versions are maintained in [`buildscripts/include/depinfo.sh`](buildscripts/include/depinfo.sh).
