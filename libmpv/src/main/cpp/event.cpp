@@ -52,6 +52,11 @@ static void sendPropertyUpdateToJava(JNIEnv *env, MPVInstance* instance, mpv_eve
         env->DeleteLocalRef(jvalue);
 }
 
+static void sendEventEndFileToJava(JNIEnv *env, MPVInstance* instance, mpv_event_end_file *end_file) {
+    env->CallVoidMethod(instance->javaObject, mpv_MPVLib_eventEndFile, (jint) end_file->reason, (jint) end_file->error);
+    clearJavaException(env);
+}
+
 static void sendEventToJava(JNIEnv *env, MPVInstance* instance, int event) {
     env->CallVoidMethod(instance->javaObject, mpv_MPVLib_event, event);
     clearJavaException(env);
@@ -85,6 +90,7 @@ void *event_thread(void *arg) {
 
     while (true) {
         mpv_event *mp_event;
+        mpv_event_end_file *mp_end_file;
         mpv_event_property *mp_property;
         mpv_event_log_message *msg;
 
@@ -106,6 +112,13 @@ void *event_thread(void *arg) {
         case MPV_EVENT_PROPERTY_CHANGE:
             mp_property = (mpv_event_property*)mp_event->data;
             sendPropertyUpdateToJava(env, instance, mp_property);
+            break;
+        case MPV_EVENT_END_FILE:
+            mp_end_file = (mpv_event_end_file*)mp_event->data;
+            sendEventEndFileToJava(env, instance, mp_end_file);
+            // Unlike upstream, still deliver END_FILE to event(int): observers written
+            // before eventEndFile existed (Ephyra's player) rely on it.
+            sendEventToJava(env, instance, mp_event->event_id);
             break;
         default:
             ALOGV("event: %s\n", mpv_event_name(mp_event->event_id));

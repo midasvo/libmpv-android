@@ -9,7 +9,7 @@ Keep this list short. Every extra line is a possible merge conflict.
 - `README.md`: the "About this fork" note at the top
 - `libmpv/build.gradle.kts`: `coordinates(...)` and the `pom { }` block (the version comes from `-PVERSION_NAME`), plus the androidTest setup
 - `gradle/libs.versions.toml` and `libmpv/src/androidTest`: instrumented smoke test
-- `libmpv/src/main/cpp` (the JNI wrapper) and `MPVLib.kt`: observer exception safety, UTF-8 sanitising, `commandWithResult()` (returns the mpv error code; `command()` stays `Unit` for binary compatibility), `getPropertyLong`, leak fixes
+- `libmpv/src/main/cpp` (the JNI wrapper) and `MPVLib.kt`: observer exception safety, UTF-8 sanitising, `commandWithResult()` (returns the mpv error code; `command()` stays `Unit` for binary compatibility), `getPropertyLong`, leak fixes, and `MPV_EVENT_END_FILE` still reaching `event(int)` after upstream's `eventEndFile(reason, error)` (upstream sends it only to `eventEndFile`, which would break observers such as Ephyra's player)
 - `.github/workflows/publish.yaml`: repository guard, tag guard, version from the tag, one signed AAR for both the release and Maven Central (with a reproducibility check), AAR check, draft release before the Maven Central upload, source tarball, release notes
 - `.github/workflows/build.yaml`: `workflow_dispatch` trigger, download retries (`WGET`), AAR check, AAR reproducibility check, emulator smoke test
 - `buildscripts/scripts/mpv.sh`: `-Dbuild-date=false`, so `libmpv.so` is reproducible (worth sending upstream)
