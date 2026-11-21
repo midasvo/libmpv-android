@@ -95,6 +95,42 @@ class MPVLibSmokeTest {
     }
 
     @Test
+    fun endFileReachesBothCallbacks() {
+        val mpv = createInitialized()
+        try {
+            val endFile = CountDownLatch(1)
+            val endFileEvent = CountDownLatch(1)
+            val endReason = AtomicInteger(-1)
+            val endError = AtomicInteger(1)
+
+            // Overrides only what it needs: the other callbacks have default bodies.
+            val observer = object : MPVLib.EventObserver {
+                override fun eventEndFile(reason: Int, error: Int) {
+                    endReason.set(reason)
+                    endError.set(error)
+                    endFile.countDown()
+                }
+
+                override fun event(eventId: Int) {
+                    // event(END_FILE) must still arrive, and after eventEndFile
+                    if (eventId == MPVLib.MpvEvent.MPV_EVENT_END_FILE && endFile.count == 0L)
+                        endFileEvent.countDown()
+                }
+            }
+            mpv.addObserver(observer)
+
+            mpv.command(arrayOf("loadfile", "/nonexistent/libmpv-smoke-test.mkv"))
+
+            assertTrue("no eventEndFile received", endFile.await(10, TimeUnit.SECONDS))
+            assertTrue("no event(END_FILE) after eventEndFile", endFileEvent.await(5, TimeUnit.SECONDS))
+            assertEquals(MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_ERROR, endReason.get())
+            assertTrue("error code should be negative, was ${endError.get()}", endError.get() < 0)
+        } finally {
+            mpv.destroy()
+        }
+    }
+
+    @Test
     fun throwingObserverDoesNotBlockOthers() {
         val mpv = createInitialized()
         try {
