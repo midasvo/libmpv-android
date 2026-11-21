@@ -6,7 +6,7 @@ This fork publishes `io.github.midasvo:libmpv` to Maven Central for [Ephyra](htt
 
 Keep this list short. Every extra line is a possible merge conflict.
 
-- `README.md`: the "About this fork" note at the top
+- `README.md`: the "About this fork" note at the top, and the library version table whenever our `depinfo.sh` is ahead of upstream's. Update the table and the version in the note when you cut a release. If the table conflicts in a sync, keep the higher version on each line, as in `depinfo.sh`.
 - `libmpv/build.gradle.kts`: `coordinates(...)` and the `pom { }` block (the version comes from `-PVERSION_NAME`), plus the androidTest setup
 - `gradle/libs.versions.toml` and `libmpv/src/androidTest`: instrumented smoke test
 - `libmpv/src/main/cpp` (the JNI wrapper) and `MPVLib.kt`: observer exception safety, UTF-8 sanitising, `commandWithResult()` (returns the mpv error code; `command()` stays `Unit` for binary compatibility), `getPropertyLong`, leak fixes, and `MPV_EVENT_END_FILE` still reaching `event(int)` after upstream's `eventEndFile(reason, error)` (upstream sends it only to `eventEndFile`, which would break observers such as Ephyra's player)
@@ -57,11 +57,11 @@ Renovate runs on this fork with upstream's `renovate.json` plus one added manage
 Versions are our own semver, starting at `1.1.0`. Raise the minor version for dependency bumps, the patch version for build or wrapper fixes, and the major version for a breaking wrapper API change. Each release's notes list the exact component versions.
 
 1. Make sure `main` is green, and merge a pending upstream sync if you want it in.
-2. Tag and push:
+2. Tag and push the next version (`gh release list --limit 1` shows the last one; a version that is already released is refused):
    ```sh
    git switch main && git pull
-   git tag -a v1.2.0 -m "libmpv 1.2.0"
-   git push origin v1.2.0
+   git tag -a vX.Y.Z -m "libmpv X.Y.Z"
+   git push origin vX.Y.Z
    ```
 3. `publish.yaml` runs in the `release` environment (only `v*` tags can deploy). It refuses tags that are not `vX.Y.Z` or whose commit is not contained in `main`, and versions that are already on Maven Central. It builds all four ABIs (about 25 minutes), then bundles and signs the AAR, runs the AAR check (`buildscripts/check-aar.sh`) on it, and checks that a second Gradle run rebuilds the same file. It then creates the **draft** GitHub release with that AAR, its `.asc`, `libmpv-<version>-sources.tar.xz` and generated notes, and only after that uploads to Maven Central with automatic release. It fails if the uploaded AAR is not the one on the draft release (until 1.2.0 they differed: the upload recompiled the wrapper).
 4. Check the deployment on [central.sonatype.com → Deployments](https://central.sonatype.com/publishing/deployments). It appears on `repo1.maven.org` within about 30 minutes, and in search later.
