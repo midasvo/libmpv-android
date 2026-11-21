@@ -175,8 +175,14 @@ class MPVLib private constructor(nativePtr: Long) {
         dispatch(observers, "event") { o -> o.event(eventId) }
     }
 
+    // Called from JNI for MPV_EVENT_END_FILE. Unlike upstream, it also delivers
+    // event(MPV_EVENT_END_FILE), which observers written before eventEndFile
+    // existed rely on. Both go to the same snapshot of observers, so one that
+    // adds or removes observers in eventEndFile cannot split a single end-file.
     fun eventEndFile(reason: Int, error: Int) {
-        dispatch(observers, "eventEndFile") { o -> o.eventEndFile(reason, error) }
+        val targets = observers.toList()
+        dispatch(targets, "eventEndFile") { o -> o.eventEndFile(reason, error) }
+        dispatch(targets, "event") { o -> o.event(MpvEvent.MPV_EVENT_END_FILE) }
     }
 
     fun eventProperty(property: String) {

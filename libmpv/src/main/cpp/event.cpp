@@ -115,10 +115,8 @@ void *event_thread(void *arg) {
             break;
         case MPV_EVENT_END_FILE:
             mp_end_file = (mpv_event_end_file*)mp_event->data;
+            // MPVLib.eventEndFile also delivers event(MPV_EVENT_END_FILE) (unlike upstream)
             sendEventEndFileToJava(env, instance, mp_end_file);
-            // Unlike upstream, still deliver END_FILE to event(int): observers written
-            // before eventEndFile existed (Ephyra's player) rely on it.
-            sendEventToJava(env, instance, mp_event->event_id);
             break;
         default:
             ALOGV("event: %s\n", mpv_event_name(mp_event->event_id));
