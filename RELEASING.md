@@ -57,8 +57,9 @@ Renovate runs on this fork with upstream's `renovate.json` plus one added manage
 Versions are our own semver, starting at `1.1.0`. Raise the minor version for dependency bumps, the patch version for build or wrapper fixes, and the major version for a breaking wrapper API change. Each release's notes list the exact component versions.
 
 1. Make sure `main` is green, and merge a pending upstream sync if you want it in.
-2. Tag and push the next version (`gh release list --limit 1` shows the last one; a version that is already released is refused):
+2. Tag and push the next version. Maven Central decides what "already released" means (`publish.yaml` refuses those), so take the last version from there, not from the GitHub releases, which can include a draft from a failed run:
    ```sh
+   curl -s https://repo1.maven.org/maven2/io/github/midasvo/libmpv/maven-metadata.xml | grep '<release>'
    git switch main && git pull
    git tag -a vX.Y.Z -m "libmpv X.Y.Z"
    git push origin vX.Y.Z
