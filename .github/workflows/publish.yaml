@@ -117,6 +117,8 @@ jobs:
             find libmpv/build -name '*.asc'
             exit 1
           fi
+          # Attached under the Maven Central name, so it pairs with its .asc
+          cp "$aar" "$RUNNER_TEMP/libmpv-${GITHUB_REF_NAME#v}.aar"
           cp "$aar.asc" "$RUNNER_TEMP/libmpv-${GITHUB_REF_NAME#v}.aar.asc"
           echo "AAR_SHA256=$(sha256sum "$aar" | cut -d' ' -f1)" >> "$GITHUB_ENV"
         env:
@@ -156,6 +158,8 @@ jobs:
             echo "The native libraries in this AAR are effectively **GPL-3.0-or-later** (\`libmpv.so\` links FFmpeg and other GPL components). Licences per component are listed in the [README](https://github.com/midasvo/libmpv-android/blob/${GITHUB_REF_NAME}/README.md#licensing)."
             echo
             echo "The complete corresponding source of this build (this repository at \`${GITHUB_REF_NAME}\` plus every dependency as downloaded and patched) is attached as \`libmpv-${GITHUB_REF_NAME#v}-sources.tar.xz\`."
+            echo
+            echo "The AAR attached here is the exact file on Maven Central (\`libmpv-${GITHUB_REF_NAME#v}.aar\`, sha256 \`${AAR_SHA256}\`), and \`libmpv-${GITHUB_REF_NAME#v}.aar.asc\` is its signature."
           } > release-notes.md
           cat release-notes.md
 
@@ -165,7 +169,7 @@ jobs:
           draft: true
           body_path: release-notes.md
           files: |
-            ./libmpv/build/outputs/aar/libmpv-release.aar
+            ${{ runner.temp }}/libmpv-*.aar
             ${{ runner.temp }}/libmpv-*.aar.asc
             ${{ runner.temp }}/libmpv-*-sources.tar.xz
 
