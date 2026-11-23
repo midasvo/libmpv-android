@@ -9,6 +9,7 @@
 #include <mpv/client.h>
 
 #include <pthread.h>
+#include <unistd.h>
 
 extern "C" {
     #include <libavcodec/jni.h>
@@ -98,6 +99,14 @@ jni_func(void, nativeDestroy, jlong instance) {
         return;
     }
 
+    // From an observer callback the event loop below us would be joined by
+    // itself and then resumed on the freed instance: refuse, leaving it usable.
+    if (gettid() == mpv_instance->event_thread_tid) {
+        throw_java_exception(env, "java/lang/IllegalStateException",
+            "destroy() was called from an MPVLib callback (mpv's event thread); call it from another thread");
+        return;
+    }
+
     mpv_instance->event_thread_request_exit = true;
     mpv_wakeup(mpv_instance->mpv);
 
@@ -172,9 +181,9 @@ jni_func(jint, nativeRequestLogMessages, jlong instance, jstring jlevel) {
         return 0;
     }
 
-    const char *level = env->GetStringUTFChars(jlevel, nullptr);
-    int result = mpv_request_log_messages(mpv_instance->mpv, level);
-    env->ReleaseStringUTFChars(jlevel, level);
+    ScopedUtfChars level(env, jlevel);
+    if (!level.c_str())
+        return MPV_ERROR_INVALID_PARAMETER; // exception pending
 
-    return result;
+    return mpv_request_log_messages(mpv_instance->mpv, level.c_str());
 }

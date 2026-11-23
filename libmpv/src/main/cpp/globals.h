@@ -3,6 +3,7 @@
 #include <atomic>
 #include <mutex>
 #include <pthread.h>
+#include <sys/types.h>
 #include <jni.h>
 #include <mpv/client.h>
 
@@ -12,6 +13,8 @@ struct MPVInstance {
     JavaVM *vm = nullptr;
     pthread_t event_thread_id = 0;
     std::atomic<bool> event_thread_request_exit{false};
+    // set by the event thread itself before its first callback
+    std::atomic<pid_t> event_thread_tid{0};
 
     jobject javaObject = nullptr;
 

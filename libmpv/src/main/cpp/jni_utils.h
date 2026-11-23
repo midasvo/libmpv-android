@@ -14,6 +14,25 @@ void init_methods_cache(JNIEnv *env);
 // replaced with '?'. Returns nullptr when str is nullptr.
 jstring new_string_utf_safe(JNIEnv *env, const char *str);
 
+// GetStringUTFChars, released when it goes out of scope. c_str() is nullptr,
+// with an exception pending, if str is null (NullPointerException) or the VM is
+// out of memory (OutOfMemoryError): the caller must then return without
+// making further JNI calls.
+class ScopedUtfChars {
+public:
+    ScopedUtfChars(JNIEnv *env, jstring str);
+    ~ScopedUtfChars();
+    const char *c_str() const { return chars; }
+
+private:
+    ScopedUtfChars(const ScopedUtfChars&) = delete;
+    ScopedUtfChars &operator=(const ScopedUtfChars&) = delete;
+
+    JNIEnv *env;
+    jstring str;
+    const char *chars = nullptr;
+};
+
 #ifndef UTIL_EXTERN
 #define UTIL_EXTERN extern
 #endif
