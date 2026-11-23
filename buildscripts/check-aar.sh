@@ -1,6 +1,8 @@
 #!/bin/bash
 # Sanity-checks a built AAR: every ABI has the expected native libraries (non-empty
-# regular files, not dangling symlinks) and the 64-bit ABIs are 16 KiB page aligned.
+# regular files, not dangling symlinks), every DT_NEEDED entry of every .so is either
+# bundled in the same ABI directory or an allowed Android system library, and the
+# 64-bit ABIs are 16 KiB page aligned.
 #
 # Usage: check-aar.sh [path-to-aar]
 set -euo pipefail
@@ -13,6 +15,11 @@ aligned_abis=(arm64-v8a x86_64)
 libs=(libmpv.so libplayer.so libavcodec.so libavformat.so libavutil.so
 	libavfilter.so libswresample.so libswscale.so libc++_shared.so)
 min_align=16384
+# Android system libraries the bundled .so files may depend on: only what they need today,
+# each present in the NDK sysroot at API 26 (minSdk) for all four ABIs. A new system
+# dependency fails the check so that someone confirms it exists on every supported device.
+system_libs=(libc.so libm.so libdl.so libz.so liblog.so libandroid.so libmediandk.so
+	libEGL.so libOpenSLES.so)
 
 if [ ! -f "$aar" ]; then
 	echo "Error: AAR not found: $aar" >&2
@@ -60,6 +67,35 @@ for abi in "${abis[@]}"; do
 		done < <(find "$dir" -type f -name '*.so')
 	fi
 	summary+=("$abi: $count .so files, $((size / 1024)) KiB")
+done
+
+for abi in "${abis[@]}"; do
+	dir=$tmp/jni/$abi
+	[ -d "$dir" ] || continue
+	while IFS= read -r f; do
+		[ -s "$f" ] || continue
+		# NEEDED lines look the same in llvm-readelf and GNU readelf, only the tag width differs:
+		#  0x0000000000000001 (NEEDED)  Shared library: [libc.so]
+		needed=$("$readelf" -dW "$f" 2>/dev/null |
+			awk '$2 == "(NEEDED)" { sub(/.*\[/, ""); sub(/\].*/, ""); print }') || needed=
+		# every Android library needs at least libc.so, so no entries means readelf could not parse it
+		if [ -z "$needed" ]; then
+			problems+=("$abi: $(basename "$f"): no NEEDED entries found (not a valid ELF?)")
+			continue
+		fi
+		while IFS= read -r dep; do
+			[ -n "$dep" ] || continue
+			[ -f "$dir/$dep" ] && continue
+			allowed=false
+			for sys_lib in "${system_libs[@]}"; do
+				if [ "$dep" = "$sys_lib" ]; then
+					allowed=true
+					break
+				fi
+			done
+			$allowed || problems+=("$abi: $(basename "$f") needs $dep, which is neither in the AAR nor an allowed system library")
+		done <<< "$needed"
+	done < <(find "$dir" -type f -name '*.so')
 done
 
 for abi in "${aligned_abis[@]}"; do
