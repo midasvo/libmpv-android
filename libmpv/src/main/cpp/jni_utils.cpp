@@ -8,6 +8,8 @@
 #include <mutex>
 #include <vector>
 
+#include "log.h"
+
 bool acquire_jni_env(JavaVM *vm, JNIEnv **env)
 {
     int ret = vm->GetEnv((void**)env, JNI_VERSION_1_6);
@@ -97,6 +99,18 @@ jstring new_string_utf_safe(JNIEnv *env, const char *str) {
     static const jchar empty = 0;
     const jchar *data = units.empty() ? &empty : units.data();
     return env->NewString(data, static_cast<jsize>(units.size()));
+}
+
+ScopedUtfChars::ScopedUtfChars(JNIEnv *env, jstring str) : env(env), str(str) {
+    if (!str)
+        throw_java_exception(env, "java/lang/NullPointerException", "string argument is null");
+    else
+        chars = env->GetStringUTFChars(str, nullptr);
+}
+
+ScopedUtfChars::~ScopedUtfChars() {
+    if (chars)
+        env->ReleaseStringUTFChars(str, chars);
 }
 
 static std::once_flag init_flag;
