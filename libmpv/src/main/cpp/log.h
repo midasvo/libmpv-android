@@ -31,3 +31,4 @@ static inline android_LogPriority mpv_level_to_android(int level) {
 
 void die(JNIEnv *env, const char *msg);
 void throw_java_exception(JNIEnv *env, const char *msg);
+void throw_java_exception(JNIEnv *env, const char *class_name, const char *msg);

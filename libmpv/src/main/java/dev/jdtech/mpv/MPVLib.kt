@@ -5,6 +5,18 @@ import android.util.Log
 import android.view.Surface
 import java.util.concurrent.CopyOnWriteArrayList
 
+/**
+ * One mpv player. Lifecycle: [create], then options with [setOptionString], then
+ * [init]; then properties, commands and observers; finally [destroy]. After
+ * [destroy] the instance is unusable: methods that reach mpv throw
+ * [IllegalStateException], and a second [destroy] does nothing.
+ *
+ * Observer and log callbacks arrive on mpv's event thread, not the main thread,
+ * one at a time. They may call the other methods of this instance, but must not
+ * call [destroy] (it throws [IllegalStateException]: post it to another thread)
+ * and must not block on a thread that is calling [destroy], which waits for the
+ * callback to return.
+ */
 @Suppress("unused")
 class MPVLib private constructor(nativePtr: Long) {
     private var nativeInstance: Long = 0
@@ -279,9 +291,9 @@ class MPVLib private constructor(nativePtr: Long) {
         const val MPV_EVENT_START_FILE: Int = 6
         const val MPV_EVENT_END_FILE: Int = 7
         const val MPV_EVENT_FILE_LOADED: Int = 8
-        @Deprecated("")
+        @Deprecated("Deprecated by mpv: observe the \"idle-active\" property instead")
         const val MPV_EVENT_IDLE: Int = 11
-        @Deprecated("")
+        @Deprecated("Deprecated by mpv and never sent by this wrapper: observe a property such as \"playback-time\" instead")
         const val MPV_EVENT_TICK: Int = 14
         const val MPV_EVENT_CLIENT_MESSAGE: Int = 16
         const val MPV_EVENT_VIDEO_RECONFIG: Int = 17

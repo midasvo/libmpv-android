@@ -30,15 +30,14 @@ jni_func(jint, nativeSetOptionString, jlong instance, jstring joption, jstring j
         return 0;
     }
 
-    const char *option = env->GetStringUTFChars(joption, nullptr);
-    const char *value = env->GetStringUTFChars(jvalue, nullptr);
+    ScopedUtfChars option(env, joption);
+    if (!option.c_str())
+        return MPV_ERROR_INVALID_PARAMETER; // exception pending
+    ScopedUtfChars value(env, jvalue);
+    if (!value.c_str())
+        return MPV_ERROR_INVALID_PARAMETER;
 
-    int result = mpv_set_option_string(mpv_instance->mpv, option, value);
-
-    env->ReleaseStringUTFChars(joption, option);
-    env->ReleaseStringUTFChars(jvalue, value);
-
-    return result;
+    return mpv_set_option_string(mpv_instance->mpv, option.c_str(), value.c_str());
 }
 
 static int common_get_property(JNIEnv *env, mpv_handle* mpv, jstring jproperty, mpv_format format, void *output) {
@@ -47,11 +46,13 @@ static int common_get_property(JNIEnv *env, mpv_handle* mpv, jstring jproperty, 
         return -1;
     }
 
-    const char *prop = env->GetStringUTFChars(jproperty, nullptr);
-    int result = mpv_get_property(mpv, prop, format, output);
+    ScopedUtfChars prop(env, jproperty);
+    if (!prop.c_str())
+        return MPV_ERROR_INVALID_PARAMETER; // exception pending
+
+    int result = mpv_get_property(mpv, prop.c_str(), format, output);
     if (result < 0)
-        ALOGE("mpv_get_property(%s) format %d returned error %s", prop, format, mpv_error_string(result));
-    env->ReleaseStringUTFChars(jproperty, prop);
+        ALOGE("mpv_get_property(%s) format %d returned error %s", prop.c_str(), format, mpv_error_string(result));
 
     return result;
 }
@@ -62,11 +63,13 @@ static int common_set_property(JNIEnv *env, mpv_handle* mpv, jstring jproperty, 
         return -1;
     }
 
-    const char *prop = env->GetStringUTFChars(jproperty, nullptr);
-    int result = mpv_set_property(mpv, prop, format, value);
+    ScopedUtfChars prop(env, jproperty);
+    if (!prop.c_str())
+        return MPV_ERROR_INVALID_PARAMETER; // exception pending
+
+    int result = mpv_set_property(mpv, prop.c_str(), format, value);
     if (result < 0)
-        ALOGE("mpv_set_property(%s, %p) format %d returned error %s", prop, value, format, mpv_error_string(result));
-    env->ReleaseStringUTFChars(jproperty, prop);
+        ALOGE("mpv_set_property(%s, %p) format %d returned error %s", prop.c_str(), value, format, mpv_error_string(result));
 
     return result;
 }
@@ -133,9 +136,11 @@ jni_func(void, nativeSetPropertyBoolean, jlong instance, jstring jproperty, jboo
 
 jni_func(void, nativeSetPropertyString, jlong instance, jstring jproperty, jstring jvalue) {
     auto mpv_instance = reinterpret_cast<MPVInstance*>(instance);
-    const char *value = env->GetStringUTFChars(jvalue, nullptr);
+    ScopedUtfChars value_chars(env, jvalue);
+    if (!value_chars.c_str())
+        return; // exception pending
+    const char *value = value_chars.c_str();
     common_set_property(env, mpv_instance->mpv, jproperty, MPV_FORMAT_STRING, &value);
-    env->ReleaseStringUTFChars(jvalue, value);
 }
 
 jni_func(void, nativeObserveProperty, jlong instance, jstring jproperty, jint jformat) {
@@ -145,9 +150,11 @@ jni_func(void, nativeObserveProperty, jlong instance, jstring jproperty, jint jf
         return;
     }
 
-    const char *prop = env->GetStringUTFChars(jproperty, nullptr);
-    int result = mpv_observe_property(mpv_instance->mpv, 0, prop, (mpv_format)jformat);
+    ScopedUtfChars prop(env, jproperty);
+    if (!prop.c_str())
+        return; // exception pending
+
+    int result = mpv_observe_property(mpv_instance->mpv, 0, prop.c_str(), (mpv_format)jformat);
     if (result < 0)
-        ALOGE("mpv_observe_property(%s) format %d returned error %s", prop, jformat, mpv_error_string(result));
-    env->ReleaseStringUTFChars(jproperty, prop);
+        ALOGE("mpv_observe_property(%s) format %d returned error %s", prop.c_str(), jformat, mpv_error_string(result));
 }

@@ -113,7 +113,7 @@ After building the AAR, `check-aar.sh` checks it:
 ./check-aar.sh [path-to-aar]   # default: libmpv/build/outputs/aar/libmpv-release.aar
 ```
 
-It fails with a list of every problem if an ABI is missing one of the expected libraries (`libmpv.so`, `libplayer.so`, the FFmpeg libraries, `libc++_shared.so`) or has an empty one, or if a 64-bit `.so` has `LOAD` segments aligned below 16 KiB (needed for 16 KiB page size devices). On success it prints the file count and size per ABI. It needs `unzip` and `readelf` (or `llvm-readelf`).
+It fails with a list of every problem if an ABI is missing one of the expected libraries (`libmpv.so`, `libplayer.so`, the FFmpeg libraries, `libc++_shared.so`) or has an empty one, if any `.so` of any ABI has a `DT_NEEDED` entry that is neither another library in the same ABI directory nor one of the Android system libraries on the script's allowlist (`system_libs`, limited to what the libraries need today and all present at API 26), or if a 64-bit `.so` has `LOAD` segments aligned below 16 KiB (needed for 16 KiB page size devices). The dependency check covers every ABI because CI only loads x86_64 on the emulator; a new system dependency fails it until someone confirms the library exists on API 26 devices and adds it to the allowlist. On success it prints the file count and size per ABI. It needs `unzip` and `readelf` (or `llvm-readelf`).
 
 # Credits, notes, etc
 

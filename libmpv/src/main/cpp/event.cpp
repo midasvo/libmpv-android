@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <unistd.h>
 
 #include <mpv/client.h>
 
@@ -87,6 +88,8 @@ void *event_thread(void *arg) {
         ALOGE("failed to acquire java env");
         return nullptr;
     }
+    // lets nativeDestroy recognise a call from one of our callbacks
+    instance->event_thread_tid = gettid();
 
     while (true) {
         mpv_event *mp_event;
