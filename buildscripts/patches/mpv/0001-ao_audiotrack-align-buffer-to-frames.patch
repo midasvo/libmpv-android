@@ -1,0 +1,36 @@
+ao_audiotrack: round the buffer size to whole frames, not samples
+
+AudioTrack throws "Invalid audio buffer size" unless the size is a multiple
+of the frame size (bytes per sample * channels). mpv rounds min/max only to
+bytes per sample, so when the driver minimum is large enough that the
+150 ms cap is chosen, some rates break: 22050 Hz stereo float gives 26460
+bytes (3307.5 frames) and the AO fails, leaving playback without sound.
+Round to the frame instead. Frames are not always a power of two (3, 5, 6
+or 7 channels), so MP_ALIGN_UP cannot be used.
+
+Issue: https://github.com/midasvo/ephyra/issues/659
+Upstream: not fixed in mpv v0.42.0 or master (checked 2026-11-23); worth
+sending to mpv. Drop this patch once an mpv release contains a fix.
+
+diff --git a/audio/out/ao_audiotrack.c b/audio/out/ao_audiotrack.c
+index f483ccc..f9dddf7 100644
+--- a/audio/out/ao_audiotrack.c
++++ b/audio/out/ao_audiotrack.c
+@@ -738,11 +738,14 @@ static int init(struct ao *ao)
+ 
+     // Choose double of the minimum buffer size suggested by the driver, but not
+     // less than 75ms or more than 150ms.
++    // AudioTrack rejects sizes that are not whole frames. A frame is not always
++    // a power of two (e.g. 5.1), so MP_ALIGN_UP can't be used to round to it.
+     const int bps = af_fmt_to_bytes(ao->format);
+-    int min = 0.075 * p->samplerate * bps * ao->channels.num;
++    const int frame = bps * ao->channels.num;
++    int min = 0.075 * p->samplerate * frame;
+     int max = min * 2;
+-    min = MP_ALIGN_UP(min, bps);
+-    max = MP_ALIGN_UP(max, bps);
++    min = (min + frame - 1) / frame * frame;
++    max = (max + frame - 1) / frame * frame;
+     p->size = MPCLAMP(buffer_size * 2, min, max);
+     MP_VERBOSE(ao, "Setting bufferSize = %d (driver=%d, min=%d, max=%d)\n", p->size, buffer_size, min, max);
+     mp_assert(p->size % bps == 0);

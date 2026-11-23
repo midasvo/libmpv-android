@@ -13,6 +13,7 @@ Keep this list short. Every extra line is a possible merge conflict.
 - `.github/workflows/publish.yaml`: repository guard, tag guard, version from the tag, one signed AAR for both the release and Maven Central (with a reproducibility check), AAR check, draft release before the Maven Central upload, source tarball, release notes
 - `.github/workflows/build.yaml`: `workflow_dispatch` trigger, download retries (`WGET`), AAR check, AAR reproducibility check, emulator smoke test
 - `buildscripts/scripts/mpv.sh`: `-Dbuild-date=false`, so `libmpv.so` is reproducible (worth sending upstream)
+- `buildscripts/patches/mpv/`: mpv source patches, applied by `patch.sh` with `git apply`. `0001-ao_audiotrack-align-buffer-to-frames.patch` rounds the AudioTrack buffer to whole frames, so 22,050 Hz audio is no longer silent ([ephyra#659](https://github.com/midasvo/ephyra/issues/659); not fixed upstream yet, worth sending to mpv). Drop it once a released mpv includes a fix.
 - `buildscripts/include/depinfo.sh`, `download-deps.sh`, `download-sdk.sh`: curl version format (`8_23_0`), sha256-verified tarballs, pinned gas-preprocessor, local-setup fix
 - `renovate.json`: one added manager for curl
 - `buildscripts/check-aar.sh` and `buildscripts/README.md`
