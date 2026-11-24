@@ -1,0 +1,16 @@
+[package]
+name = "player"
+version = "0.0.0"
+description = "JNI wrapper between dev.jdtech.mpv.MPVLib and libmpv"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+jni-sys = "0.4.1"
