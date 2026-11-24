@@ -9,7 +9,8 @@
 //! Handles: an unknown or destroyed handle throws `IllegalStateException`,
 //! except in `nativeDestroy` (no-op, like a second `destroy()`) and
 //! `nativeCommand` (returns `MPV_ERROR_UNINITIALIZED`, the C++ wrapper's code
-//! for "mpv is gone").
+//! for "mpv is gone"). A call from one of the instance's own stream callbacks
+//! throws `IllegalStateException` everywhere, `nativeCommand` included.
 
 use std::any::Any;
 use std::ffi::{CString, c_char, c_int, c_void};
@@ -131,6 +132,11 @@ pub extern "system" fn Java_dev_jdtech_mpv_MPVLib_nativeCommand(
             log::error("Cannot run command: mpv is not initialized");
             return Ok(MPV_ERROR_UNINITIALIZED);
         };
+        // like every other entry point (a destroyed instance keeps the 1.3.0
+        // return code below)
+        if instance.in_own_stream_callback() {
+            return Err(Failure::from_stream_callback());
+        }
         let Ok(active) = instance.enter() else {
             log::error("Cannot run command: mpv is not initialized");
             return Ok(MPV_ERROR_UNINITIALIZED);

@@ -18,13 +18,25 @@
 //!   between still calls it. The cookie is therefore not a pointer but a
 //!   registry id that is never reused: `close_fn` removes the entry, a late
 //!   `cancel_fn` finds nothing, and a `cancel_fn` that found the entry just
-//!   before keeps it alive (an `Arc`) until it returns.
+//!   before keeps it alive (an `Arc`) until its cancellation has run.
 //! - `mpv_terminate_destroy` closes every stream before it returns.
+//!
+//! Threads. `open_fn`, `read_fn`, `seek_fn`, `size_fn` and `close_fn` run on
+//! the thread that opened the stream: one of mpv's, or, for a synchronous
+//! command that opens a URL itself (`load-config-file`, say: mpv runs those
+//! on the calling thread, under its core lock), the app's thread making that
+//! call, inside the instance's gate. `cancel_fn` is called by whichever
+//! thread triggers mpv's cancellation, with mpv's `abort_lock` held: the
+//! thread calling `mpv_abort_async_command` (an app thread cancelling a
+//! coroutine), or the one in `mpv_terminate_destroy` (the app's `destroy()`).
+//! It therefore does not cancel the stream itself but hands that to one
+//! thread of its own (`canceller`), so the app's `cancel` never runs on those
+//! threads, under mpv's lock, or inside the gate; `cancel_fn` returns at once.
 //!
 //! The callbacks must not call into mpv for the same instance (stream_cb.h:
 //! that deadlocks). While one runs, the thread is marked with the instance
 //! (`in_callback_of`) and the instance refuses calls from it with an
-//! exception instead.
+//! exception instead; the canceller thread is marked the same way.
 
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -240,10 +252,55 @@ unsafe extern "C" fn close_fn<B: Backend>(cookie: *mut c_void) {
 unsafe extern "C" fn cancel_fn<B: Backend>(cookie: *mut c_void) {
     guarded((), || {
         if let Some(stream) = B::streams().get(from_cookie(cookie)) {
-            let _scope = Scope::enter(stream.owner());
-            stream.cancel();
+            canceller::run(Box::new(move || {
+                let _scope = Scope::enter(stream.owner());
+                stream.cancel();
+            }));
         }
     });
+}
+
+/// The thread that runs the streams' cancellations, in the order mpv asked
+/// for them. Started on the first cancellation and kept for the life of the
+/// process. A cancellation that blocks delays the ones after it (of every
+/// instance), so `Stream::cancel` must not block.
+pub mod canceller {
+    use std::panic::{self, AssertUnwindSafe};
+    use std::sync::OnceLock;
+    use std::sync::mpsc::{self, Sender};
+    use std::thread;
+
+    pub type Job = Box<dyn FnOnce() + Send>;
+
+    pub const THREAD_NAME: &str = "mpv-stream-cancel";
+
+    static QUEUE: OnceLock<Option<Sender<Job>>> = OnceLock::new();
+
+    fn start() -> Option<Sender<Job>> {
+        let (tx, rx) = mpsc::channel::<Job>();
+        thread::Builder::new()
+            .name(THREAD_NAME.into())
+            .spawn(move || {
+                for job in rx {
+                    // a panic must not end the thread (or leave later jobs undone)
+                    let _ = panic::catch_unwind(AssertUnwindSafe(job));
+                }
+            })
+            .ok()
+            .map(|_| tx)
+    }
+
+    /// Queues `job`; runs it here only if the thread could not be started.
+    pub fn run(job: Job) {
+        match QUEUE.get_or_init(start) {
+            Some(tx) => {
+                if let Err(mpsc::SendError(job)) = tx.send(job) {
+                    job();
+                }
+            }
+            None => job(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -341,7 +398,12 @@ mod tests {
             self.log("close".into());
         }
         fn cancel(&self) {
-            self.log("cancel".into());
+            let thread = std::thread::current();
+            self.log(format!(
+                "cancel on {} marked {}",
+                thread.name().unwrap_or("?"),
+                in_callback_of(self.owner)
+            ));
         }
     }
 
@@ -467,9 +529,43 @@ mod tests {
         std::thread::spawn(move || unsafe { cancel(cookie as *mut c_void) })
             .join()
             .unwrap();
-        assert_eq!(log.lock().unwrap().last().unwrap(), "cancel");
+        // not on the thread that triggered it (mpv's abort_lock is held there),
+        // but on the canceller, marked as one of the instance's callbacks
+        let expected = format!("cancel on {} marked true", canceller::THREAD_NAME);
+        wait_for(|| log.lock().unwrap().contains(&expected));
         unsafe { info.close_fn.unwrap()(info.cookie) };
         unregister::<Fake>(id);
+    }
+
+    fn wait_for(condition: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !condition() {
+            assert!(std::time::Instant::now() < deadline, "timed out");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn the_canceller_runs_jobs_in_order_and_never_blocks_the_caller() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let done = Arc::new(Mutex::new(Vec::new()));
+        let d = Arc::clone(&done);
+        // a cancellation that blocks...
+        canceller::run(Box::new(move || {
+            release_rx.recv().unwrap();
+            d.lock().unwrap().push(1);
+        }));
+        // ...does not block the thread that asked for it, nor the next request
+        let d = Arc::clone(&done);
+        canceller::run(Box::new(move || d.lock().unwrap().push(2)));
+        // a panicking job does not stop the thread
+        canceller::run(Box::new(|| panic!("a cancel panicked")));
+        let d = Arc::clone(&done);
+        canceller::run(Box::new(move || d.lock().unwrap().push(3)));
+        assert!(done.lock().unwrap().is_empty());
+        release_tx.send(()).unwrap();
+        wait_for(|| done.lock().unwrap().len() == 3);
+        assert_eq!(*done.lock().unwrap(), [1, 2, 3]);
     }
 
     #[test]

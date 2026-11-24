@@ -4,7 +4,7 @@ import android.util.Log
 import dev.jdtech.mpv.MPVLib.MpvError
 import dev.jdtech.mpv.MpvStream
 import dev.jdtech.mpv.MpvStreamProvider
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "mpv"
 
@@ -26,20 +26,28 @@ internal class ProtocolAdapter(private val protocol: String, private val provide
 
 /**
  * One open stream. mpv calls [read], [seek], [size] and [close] on one thread, in turn;
- * [cancel] on any thread, also during the others and after [close]. Each translates what
- * the [MpvStream] returns or throws into mpv's stream_cb conventions and never throws
- * itself (an Error aside, which libplayer logs and clears).
+ * [cancel] comes on libplayer's canceller thread, also during the others and during or
+ * after [close]. Each translates what the [MpvStream] returns or throws into mpv's
+ * stream_cb conventions and never throws itself (an Error aside, which libplayer logs and
+ * clears).
+ *
+ * [MpvStream.cancel] is never called once [MpvStream.close] has begun: [close] first stops
+ * new cancels, then waits for one in progress to return (a cancel must not block anyway),
+ * then closes. A cancel never waits for a close.
  */
 internal class StreamAdapter(private val stream: MpvStream) {
     private val buffer = ByteArray(BUFFER_SIZE)
-    private val closed = AtomicBoolean(false)
+
+    // CLOSED once close() began; the low bits count the cancels in progress
+    private val state = AtomicInteger(0)
+    private val cancelsDone = Object()
 
     /** The array [read] fills; libplayer copies from it into mpv's buffer. */
     fun buffer(): ByteArray = buffer
 
     /** `read_fn`: bytes read into [buffer] (1..[length]), 0 at the end, -1 on error. */
     fun read(length: Int): Int {
-        if (closed.get() || length !in 1..buffer.size) return -1
+        if (state.get() and CLOSED != 0 || length !in 1..buffer.size) return -1
         val n = try {
             stream.read(buffer, 0, length)
         } catch (e: Exception) {
@@ -77,9 +85,21 @@ internal class StreamAdapter(private val stream: MpvStream) {
             MpvError.MPV_ERROR_UNSUPPORTED.toLong()
         }
 
-    /** `close_fn`: closes the stream once. */
+    /** `close_fn`: closes the stream once, after any cancel in progress has returned. */
     fun close() {
-        if (!closed.compareAndSet(false, true)) return
+        val before = state.getAndUpdate { it or CLOSED }
+        if (before and CLOSED != 0) return // closed already
+        var interrupted = false
+        synchronized(cancelsDone) {
+            while (state.get() != CLOSED) {
+                try {
+                    cancelsDone.wait()
+                } catch (e: InterruptedException) {
+                    interrupted = true // close anyway; keep the interrupt for the caller
+                }
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
         try {
             stream.close()
         } catch (e: Exception) {
@@ -87,17 +107,27 @@ internal class StreamAdapter(private val stream: MpvStream) {
         }
     }
 
-    /** `cancel_fn`: passed on unless the stream is closed. Must not block. */
+    /** `cancel_fn`: passed on unless the stream is closing or closed. Must not block. */
     fun cancel() {
-        if (closed.get()) return
+        while (true) {
+            val s = state.get()
+            if (s and CLOSED != 0) return
+            if (state.compareAndSet(s, s + 1)) break
+        }
         try {
             stream.cancel()
         } catch (e: Exception) {
             Log.w(TAG, "a stream's cancel failed", e)
+        } finally {
+            // the last cancel to leave wakes a close() that waits for it
+            if (state.decrementAndGet() == CLOSED) {
+                synchronized(cancelsDone) { cancelsDone.notifyAll() }
+            }
         }
     }
 
     companion object {
+        private const val CLOSED = 1 shl 30
         /** The most one read hands mpv; mpv asks again for the rest. */
         const val BUFFER_SIZE = 128 * 1024
     }

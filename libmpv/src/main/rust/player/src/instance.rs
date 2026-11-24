@@ -26,16 +26,30 @@
 //! - `destroy` holds no lock while it waits. It waits for two things: the
 //!   event thread to finish (whose callbacks may call back into the instance:
 //!   the gate still admits them, without blocking, until the join is done),
-//!   then for the calls in flight to leave the gate (none of which runs Java
-//!   code or waits for another thread; they only wait for mpv's core, which
-//!   does not depend on us). Nothing either waits for can be waiting for
-//!   `destroy`, so the waits end.
+//!   then for the calls in flight to leave the gate. Those wait only for mpv's
+//!   core, which does not depend on us, with one exception: a synchronous
+//!   command that opens a URL of a custom protocol itself (mpv runs such
+//!   commands on the calling thread) runs that stream's callbacks, app code,
+//!   inside the call. Those callbacks cannot call the instance or `destroy`
+//!   (refused, see below), so they cannot wait for `destroy`; one that
+//!   blocks forever blocks `destroy` too, as MPVLib's documentation says.
+//!   Nothing else either waits for can be waiting for `destroy`, so the
+//!   waits end. A second thread calling `destroy` meanwhile waits for the
+//!   first to finish (`Lifecycle::wait_destroyed`), unless it is the event
+//!   thread or in a stream callback, which are refused instead: the first
+//!   one may be waiting for exactly them.
+//! - Stream cancellation never runs app code on a waiting thread: mpv calls
+//!   `cancel_fn` on the thread that triggers it, with its `abort_lock` held
+//!   (an app thread in `mpv_abort_async_command`, inside the gate, or the
+//!   thread in `mpv_terminate_destroy`), and `cancel_fn` only queues the
+//!   cancellation for the `stream::canceller` thread.
 //! - The asynchronous calls only queue a request in the gate; their replies
 //!   are events like any other, delivered by the event thread. A reply that
 //!   was still on its way when `destroy` stopped the event thread is never
 //!   delivered: Kotlin fails the request when `destroy` returns.
-//! - Stream callbacks (`stream`) run on mpv's own threads, outside the gate,
-//!   and `mpv_terminate_destroy` waits for them (it closes every stream). A
+//! - Stream callbacks (`stream`) run on mpv's own threads, outside the gate
+//!   (or inside a call, as above), and `mpv_terminate_destroy` waits for them
+//!   (it closes every stream). A
 //!   thread inside a stream callback of this instance is refused at `enter`
 //!   and in `destroy` (stream_cb.h: calling mpv from there deadlocks), so
 //!   they never wait for anything of ours either. Protocols stay registered
@@ -109,7 +123,7 @@ impl Failure {
         }
     }
 
-    fn from_stream_callback() -> Failure {
+    pub fn from_stream_callback() -> Failure {
         Failure::Throw(
             ILLEGAL_STATE,
             Cow::Borrowed(
@@ -418,6 +432,12 @@ impl Instance {
         ptr::from_ref(self) as usize
     }
 
+    /// Whether the current thread is inside one of this instance's stream
+    /// callbacks, where every call into the instance is refused.
+    pub fn in_own_stream_callback(&self) -> bool {
+        stream::in_callback_of(self.owner())
+    }
+
     pub fn enter(&self) -> Result<Active<'_>> {
         if stream::in_callback_of(self.owner()) {
             return Err(Failure::from_stream_callback());
@@ -583,8 +603,12 @@ impl Instance {
     }
 }
 
-/// `nativeDestroy`. A handle that is unknown, or whose instance another
-/// thread is already destroying, is a no-op, like a second `destroy()`.
+/// `nativeDestroy`. Returns once the instance is torn down: when another
+/// thread is already destroying it, after waiting for that thread to finish.
+/// A handle that is unknown or already destroyed is a no-op, like a second
+/// `destroy()`. Refused (IllegalStateException, nothing changed) from the
+/// event thread and from this instance's stream callbacks, which the teardown
+/// waits for.
 pub fn destroy(handle: jlong) -> Result<()> {
     let Some(instance) = lookup(handle) else {
         log::verbose(|| "Cannot destroy mpv: mpv is not initialized".into());
@@ -607,8 +631,16 @@ pub fn destroy(handle: jlong) -> Result<()> {
                 ),
             ));
         }
-        Err(CloseError::AlreadyClosing) => return Ok(()),
+        // another thread is tearing it down: return when it is done, as it will.
+        // (This thread is not one that teardown waits for: those are refused above,
+        // in_callback_of, or by begin_close, FromWorker.)
+        Err(CloseError::AlreadyClosing) => {
+            instance.lifecycle.wait_destroyed();
+            return Ok(());
+        }
     };
+    // however this function ends (a panic included), never leave losers waiting
+    let _destroyed = Destroyed(&instance.lifecycle);
 
     // Stop the event thread. Until it is joined, its callbacks (and other
     // threads) may still use mpv: the gate admits them while Closing.
@@ -643,6 +675,7 @@ pub fn destroy(handle: jlong) -> Result<()> {
         .unwrap_or_else(PoisonError::into_inner)
         .take();
     INSTANCES.remove(handle);
+    // (the guard `_destroyed`, dropped here, releases the callers waiting above)
     // The MPVLib global reference goes with the last Arc: here, or in a call
     // that looked the handle up just before and is about to fail.
     Ok(())
@@ -935,4 +968,13 @@ fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result
         }
     }
     Ok(())
+}
+
+/// Marks the teardown finished (`Lifecycle::finish_destroy`) when dropped.
+struct Destroyed<'a>(&'a Lifecycle<JoinHandle<()>>);
+
+impl Drop for Destroyed<'_> {
+    fn drop(&mut self) {
+        self.0.finish_destroy();
+    }
 }

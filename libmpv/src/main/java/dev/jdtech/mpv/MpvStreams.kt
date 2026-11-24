@@ -10,11 +10,16 @@ import java.io.IOException
  * Opens the streams of a protocol registered with [registerStreamProtocol]: mpv calls
  * [open] for each URI with that protocol it is asked to play (`loadfile`, `sub-add`, ...).
  *
- * Called on one of mpv's own threads, never the main thread, possibly for several URIs at
- * once. It may block (it should still honour the timeouts the app wants, as nothing
- * cancels an open). It must not call this [MPVLib] instance (mpv would deadlock: the call
- * throws [IllegalStateException] instead), and must not wait for a thread that is calling
- * [MPVLib.destroy] (which waits for mpv to close its streams).
+ * Threads: usually one of mpv's own threads, possibly for several URIs at once. But mpv
+ * runs some synchronous commands on the thread that calls them, and when such a command
+ * opens a URI itself (`load-config-file app://x`, say, through [MPVLib.command] or
+ * [commandNode]), [open] and the stream's other methods run on that calling thread, in the
+ * middle of the call: on the main thread if the call is made there. [open] may block (it
+ * should still honour the timeouts the app wants, as nothing cancels an open).
+ *
+ * It must not call this [MPVLib] instance (mpv would deadlock: every such call, [MPVLib.destroy]
+ * and [MPVLib.command] included, throws [IllegalStateException] instead), and must not wait
+ * for a thread that is calling [MPVLib.destroy] (which waits for mpv to close its streams).
  */
 fun interface MpvStreamProvider {
     /**
@@ -30,16 +35,18 @@ fun interface MpvStreamProvider {
  * or a `ContentResolver` input stream for a `content://` URI). Maps to the callbacks of
  * mpv's `mpv_stream_cb_info`.
  *
- * Threads: [read], [seek], [size] and [close] are called on one of mpv's threads, one at a
- * time. [cancel] is called on another thread, also while one of them is blocked. None of
- * them may call this [MPVLib] instance (see [MpvStreamProvider]). An exception thrown by
- * any of them is logged and becomes mpv's error for that call; it never reaches mpv's
- * threads.
+ * Threads: [read], [seek], [size] and [close] are called one at a time on the thread that
+ * opened the stream (see [MpvStreamProvider]). [cancel] is called on a thread of
+ * libplayer's own, "mpv-stream-cancel", also while one of the others is blocked; never on
+ * the thread that cancels a coroutine or calls [MPVLib.destroy]. None of them may call this
+ * [MPVLib] instance (see [MpvStreamProvider]). An exception thrown by any of them is logged
+ * and becomes mpv's error for that call; it never reaches mpv's threads.
  *
  * Lifetime: mpv owns the stream from [MpvStreamProvider.open] until it calls [close],
  * exactly once, also when the file is stopped or the instance destroyed
- * ([MPVLib.destroy] returns only after every stream is closed). After [close] nothing is
- * called again.
+ * ([MPVLib.destroy] returns only after every stream is closed). Once [close] has begun,
+ * nothing is called again, [cancel] included: a [cancel] still running then is waited for
+ * before [close] is called.
  */
 interface MpvStream {
     /**
@@ -53,9 +60,11 @@ interface MpvStream {
 
     /**
      * Moves to absolute byte [position] and returns it. mpv calls `seek(0)` right after
-     * opening to learn whether the stream can seek: the default throws
-     * [UnsupportedOperationException], which makes it a non-seekable stream (`seek_fn`
-     * returns `MPV_ERROR_UNSUPPORTED`). Any other exception fails just that seek.
+     * opening to learn whether the stream can seek, and decides for the stream's whole
+     * life: if that first call throws (the default throws
+     * [UnsupportedOperationException]) or returns a negative number, mpv never calls
+     * [seek] again and reads the stream from start to end only. After a successful first
+     * call, an exception fails just that one seek.
      */
     fun seek(position: Long): Long = throw UnsupportedOperationException("not seekable")
 
@@ -64,10 +73,14 @@ interface MpvStream {
 
     /**
      * Makes a [read] or [seek] that is blocked, or comes later, return soon (with an error
-     * or the end of the stream). mpv calls it on another thread when it gives up on the
-     * stream, for example when the file is stopped or the instance destroyed. Must not
-     * block. The default does nothing, which is fine only for streams that never block for
-     * long.
+     * or the end of the stream). Called when mpv gives up on the stream: the file is
+     * stopped, the command that opened it is aborted (a cancelled [commandAsync]), or the
+     * instance is destroyed. It runs on libplayer's "mpv-stream-cancel" thread, one cancel
+     * after another for all streams of all instances, shortly after mpv asked for it (also
+     * after the [read] it was meant for has returned). Must not block: a blocked cancel
+     * holds up the cancels of every other stream, and if a [read] waits for it,
+     * [MPVLib.destroy] waits too. The default does nothing, which is fine only for streams
+     * that never block for long.
      */
     fun cancel() {}
 

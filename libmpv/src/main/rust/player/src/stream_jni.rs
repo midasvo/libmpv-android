@@ -3,10 +3,13 @@
 //! StreamAdapter), which call the app's provider and translate its results
 //! and exceptions into mpv's conventions.
 //!
-//! Threads: mpv calls these on its own threads (demuxer and stream threads,
-//! and whichever thread cancels). `Vm::with_thread_env` attaches such a
-//! thread on its first callback and keeps it attached until the thread exits,
-//! so a stream's reads cost no attach each. The adapters catch what the
+//! Threads (see `stream`): these run on mpv's own threads (demuxer and stream
+//! threads), on an app thread for a synchronous command that opens the URL
+//! itself, and, for `cancel`, on the `stream::canceller` thread.
+//! `Vm::with_thread_env` attaches a thread that is not attached yet on its
+//! first callback and keeps it attached until the thread exits, so a stream's
+//! reads cost no attach each; an app thread is already attached and is left
+//! as it is. The adapters catch what the
 //! provider throws; whatever still reaches here (an Error thrown by the
 //! adapter itself) is logged and cleared, never left pending, and the call
 //! fails.

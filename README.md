@@ -168,8 +168,10 @@ mpv.command(arrayOf("loadfile", "local://$contentUri"))
 ```
 
 Use it when mpv cannot open the source itself: your own HTTP client (authentication, caching), a
-`ContentResolver`, data in memory. The provider and the streams run on mpv's threads and must not
-call the same `MPVLib` instance. The KDoc in `MpvStreams.kt` has the rules.
+`ContentResolver`, data in memory. The provider and the streams usually run on mpv's threads; a
+synchronous command that opens such a URI itself runs them on the calling thread. They must not
+call the same `MPVLib` instance: that throws `IllegalStateException`. The KDoc in `MpvStreams.kt`
+has the rules.
 
 Every public function and type has KDoc. The exact public API is in
 [`libmpv/api/libmpv.api`](libmpv/api/libmpv.api).

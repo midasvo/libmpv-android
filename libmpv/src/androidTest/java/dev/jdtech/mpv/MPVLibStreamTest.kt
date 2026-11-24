@@ -8,6 +8,7 @@ import dev.jdtech.mpv.ApiTestSupport.test
 import dev.jdtech.mpv.ApiTestSupport.wavBytes
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
@@ -163,6 +164,8 @@ class MPVLibStreamTest {
         if (destroyer.isAlive) fail("destroy() did not return with a stream open; stream calls: ${stalled.calls}")
         error.get()?.let { throw it }
         assertEquals("mpv cancelled the stalled read", 0L, stalled.cancelled.count)
+        // not on the thread in destroy() (mpv holds its abort lock there), on libplayer's own
+        assertEquals("mpv-stream-cancel", stalled.cancelThread.get()?.name)
         assertEquals("closed", 0L, stalled.closed.count)
         assertEquals(stalled.calls.toString(), 1, stalled.calls.count { it == "close" })
         assertFalse(stalled.calls.toString(), stalled.calls.any { it.startsWith("AFTER CLOSE") })
@@ -244,5 +247,92 @@ class MPVLibStreamTest {
         assertTrue("$reads reads", reads >= 30)
         assertTrue("$reads reads on threads $threads", threads.size <= 4)
         test { eventually { threads.none { it.isAlive } } }
+    }
+
+    /**
+     * Two threads call destroy() at once: the second must not return while the first is
+     * still tearing down (here: held in a stream's close, inside mpv_terminate_destroy).
+     */
+    @Test
+    fun aSecondDestroyReturnsOnlyAfterTheTeardown() {
+        val release = CountDownLatch(1)
+        val stalled = RecordingStream(ByteArray(0), blockReads = true, holdClose = release)
+        val mpv = TestMpv.create()
+        mpv.registerStreamProtocol(PROTOCOL) { stalled }
+        mpv.command(arrayOf("loadfile", "$PROTOCOL://stalled"))
+        ApiTestSupport.await(stalled.readBlocked, "the stalled read")
+
+        val order = CopyOnWriteArrayList<String>()
+        val errors = CopyOnWriteArrayList<Throwable>()
+        fun destroyer(name: String) = thread(name = "libmpv-test-$name") {
+            try {
+                mpv.destroy()
+                order += "$name returned"
+            } catch (t: Throwable) {
+                errors += t
+            }
+        }
+        val first = destroyer("first")
+        ApiTestSupport.await(stalled.closed, "the teardown to reach the stream's close")
+        val second = destroyer("second")
+        // a second destroy() that returned early would do so now (a correct one is never
+        // failed by this wait, only an early return is caught by it)
+        second.join(500)
+        order += "close released"
+        release.countDown()
+        first.join(TimeUnit.SECONDS.toMillis(TestMpv.TIMEOUT_SECONDS))
+        second.join(TimeUnit.SECONDS.toMillis(TestMpv.TIMEOUT_SECONDS))
+        assertTrue("destroy() hung", !first.isAlive && !second.isAlive)
+        assertEquals(emptyList<Throwable>(), errors.toList())
+        assertEquals("close released", order.first())
+        assertEquals(setOf("first returned", "second returned"), order.drop(1).toSet())
+        assertEquals(0L, stalled.closeReturned.count)
+        // and both left it destroyed
+        assertThrows(IllegalStateException::class.java) { mpv.getPropertyString("mpv-version") }
+        mpv.destroy() // a third one: nothing to do
+    }
+
+    /**
+     * mpv runs some synchronous commands on the calling thread; one that opens a URL itself
+     * (load-config-file) calls the provider there, in the middle of the call. Calls into
+     * the instance from there throw, command() included, instead of deadlocking.
+     */
+    @Test
+    fun aSynchronousCommandOpensTheStreamOnTheCallingThread() = TestMpv.withMpv { mpv ->
+        val openedOn = AtomicReference<Thread?>()
+        val refused = CopyOnWriteArrayList<String>()
+        mpv.registerStreamProtocol(PROTOCOL) {
+            openedOn.set(Thread.currentThread())
+            fun attempt(what: String, call: () -> Unit) {
+                try {
+                    call()
+                    refused += "$what: not refused"
+                } catch (e: IllegalStateException) {
+                    refused += what
+                }
+            }
+            attempt("getPropertyString") { mpv.getPropertyString("mpv-version") }
+            attempt("command") { mpv.command(arrayOf("stop")) }
+            attempt("commandWithResult") { mpv.commandWithResult(arrayOf("stop")) }
+            attempt("getPropertyNode") { mpv.getPropertyNode("mpv-version") }
+            attempt("destroy") { mpv.destroy() }
+            RecordingStream("volume=42\n".toByteArray())
+        }
+        mpv.commandNode(MpvNode.command("load-config-file", "$PROTOCOL://settings.conf"))
+        assertEquals(Thread.currentThread(), openedOn.get())
+        assertEquals(listOf("getPropertyString", "command", "commandWithResult", "getPropertyNode", "destroy"), refused.toList())
+        // the config came through the stream, and the instance is fine
+        assertEquals(42.0, mpv.getPropertyDouble("volume")!!, 0.0)
+    }
+
+    /** A failed first seek(0) makes the stream non-seekable for good: mpv reads it through. */
+    @Test
+    fun aFailedSeekProbeMakesTheStreamLinear() = TestMpv.withMpv { mpv ->
+        val stream = RecordingStream(wavBytes(0.25), failFirstSeek = true)
+        mpv.registerStreamProtocol(PROTOCOL) { stream }
+        val end = endOf(mpv) { mpv.command(arrayOf("loadfile", "$PROTOCOL://linear")) }
+        assertEquals(MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_EOF, end.reason)
+        ApiTestSupport.await(stream.closed, "close")
+        assertEquals(stream.calls.toString(), listOf("seek 0"), stream.calls.filter { it.startsWith("seek") })
     }
 }

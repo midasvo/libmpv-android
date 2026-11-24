@@ -10,10 +10,19 @@
 //!    for that thread to finish.
 //! 2. `finish_close` (phase `Closed`), after the join: new calls are refused,
 //!    and it waits until the calls in flight have left.
+//! 3. `finish_destroy` (phase `Destroyed`), once the closer has destroyed the
+//!    handle: wakes the callers that lost `begin_close` and are waiting in
+//!    `wait_destroyed`, so that every `destroy()` that returns normally
+//!    returns after the teardown, not while it is still running.
 //!
 //! No caller ever blocks to *enter*: a call is admitted or refused at once.
-//! The only waits are the closer's (the join, then `finish_close`), and every
-//! thread it waits for holds no lock of ours while it runs (see `enter`).
+//! The waits are the closer's (the join, then `finish_close`) and the losing
+//! closers' (`wait_destroyed`, for the winner). Every thread the winner waits
+//! for holds no lock of ours while it runs (see `enter`), and is never a
+//! losing closer: the instance refuses `destroy` from the event thread
+//! (`FromWorker`, checked before `AlreadyClosing`) and from its own stream
+//! callbacks, the only places where a thread the winner waits for could call
+//! it.
 
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
@@ -23,6 +32,7 @@ pub enum Phase {
     Open,
     Closing,
     Closed,
+    Destroyed,
 }
 
 pub struct Lifecycle<W> {
@@ -99,11 +109,13 @@ impl<W> Lifecycle<W> {
 
     /// Admits a call, or refuses it (`None`) once the instance is `Closed`.
     /// Never blocks beyond the brief internal lock. The caller must not hold
-    /// the returned `Call` while running Java callbacks or waiting for another
-    /// thread: `finish_close` waits for it.
+    /// the returned `Call` while waiting for another thread, nor while running
+    /// Java code that could: `finish_close` waits for it. (The one Java code
+    /// that runs inside a call is a stream callback mpv makes on the calling
+    /// thread; the instance refuses every call and `destroy` from it.)
     pub fn enter(&self) -> Option<Call<'_, W>> {
         let mut inner = self.lock();
-        if inner.phase == Phase::Closed {
+        if matches!(inner.phase, Phase::Closed | Phase::Destroyed) {
             return None;
         }
         inner.active += 1;
@@ -163,6 +175,27 @@ impl<W> Lifecycle<W> {
         debug_assert_eq!(inner.phase, Phase::Closing);
         inner.phase = Phase::Closed;
         while inner.active > 0 {
+            inner = self
+                .idle
+                .wait(inner)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// Step 3, for the caller that won `begin_close`, once the teardown is
+    /// over: releases the callers waiting in `wait_destroyed`. Idempotent.
+    pub fn finish_destroy(&self) {
+        let mut inner = self.lock();
+        inner.phase = Phase::Destroyed;
+        self.idle.notify_all();
+    }
+
+    /// For a caller that got `AlreadyClosing`: returns once the winner has
+    /// called `finish_destroy`. Must not be called from a thread the winner
+    /// waits for (the worker, or one inside a call): it would never return.
+    pub fn wait_destroyed(&self) {
+        let mut inner = self.lock();
+        while inner.phase != Phase::Destroyed {
             inner = self
                 .idle
                 .wait(inner)
@@ -372,6 +405,71 @@ mod tests {
         );
         worker.join().unwrap();
         lc.finish_close();
+    }
+
+    #[test]
+    fn a_losing_closer_returns_only_after_the_teardown() {
+        let lc: Arc<Lc> = Arc::new(Lifecycle::new());
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        lc.begin_close().unwrap();
+
+        let (lost_tx, lost_rx) = mpsc::channel();
+        let loser = {
+            let lc = Arc::clone(&lc);
+            let order = Arc::clone(&order);
+            thread::spawn(move || {
+                assert_eq!(lc.begin_close().unwrap_err(), CloseError::AlreadyClosing);
+                lost_tx.send(()).unwrap();
+                lc.wait_destroyed();
+                order.lock().unwrap().push("loser returned");
+            })
+        };
+        lost_rx.recv().unwrap();
+        // the winner's teardown, slow enough that an early return would show
+        thread::sleep(Duration::from_millis(20));
+        assert!(!loser.is_finished(), "returned during the teardown");
+        lc.finish_close();
+        assert!(lc.enter().is_none());
+        order.lock().unwrap().push("teardown done");
+        lc.finish_destroy();
+        loser.join().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["teardown done", "loser returned"]);
+
+        // later callers return at once, and calls stay refused
+        assert_eq!(lc.begin_close().unwrap_err(), CloseError::AlreadyClosing);
+        lc.wait_destroyed();
+        assert!(lc.enter().is_none());
+        assert_eq!(lc.phase(), Phase::Destroyed);
+    }
+
+    #[test]
+    fn many_losers_all_wait_for_the_winner() {
+        for _ in 0..20 {
+            let lc: Arc<Lc> = Arc::new(Lifecycle::new());
+            let done = Arc::new(AtomicBool::new(false));
+            let threads: Vec<_> = (0..4)
+                .map(|_| {
+                    let lc = Arc::clone(&lc);
+                    let done = Arc::clone(&done);
+                    thread::spawn(move || match lc.begin_close() {
+                        Ok(_) => {
+                            lc.finish_close();
+                            thread::yield_now();
+                            done.store(true, Ordering::SeqCst);
+                            lc.finish_destroy();
+                        }
+                        Err(CloseError::AlreadyClosing) => {
+                            lc.wait_destroyed();
+                            assert!(done.load(Ordering::SeqCst), "a loser returned first");
+                        }
+                        Err(e) => panic!("{e:?}"),
+                    })
+                })
+                .collect();
+            for t in threads {
+                t.join().unwrap();
+            }
+        }
     }
 
     #[test]

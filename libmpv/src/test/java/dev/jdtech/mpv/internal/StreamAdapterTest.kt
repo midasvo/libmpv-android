@@ -8,6 +8,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The translation between an app's [MpvStream] and mpv's stream_cb conventions. */
@@ -124,6 +125,83 @@ class StreamAdapterTest {
         adapter.cancel() // after close: not passed on
         assertEquals(listOf("cancel", "close"), stream.calls)
         assertEquals(-1, adapter.read(5))
+    }
+
+    /** A stream whose cancel and close can be held, recording where each starts and ends. */
+    private class Gated(val holdCancel: Boolean = false, val holdClose: Boolean = false) : MpvStream {
+        val calls: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+        val cancelEntered = java.util.concurrent.CountDownLatch(1)
+        val closeEntered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        override fun read(buffer: ByteArray, offset: Int, length: Int) = -1
+        override fun cancel() {
+            calls += "cancel begins"
+            cancelEntered.countDown()
+            if (holdCancel) release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            calls += "cancel ends"
+        }
+        override fun close() {
+            calls += "close begins"
+            closeEntered.countDown()
+            if (holdClose) release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            calls += "close ends"
+        }
+    }
+
+    @Test
+    fun closeWaitsForACancelInProgressAndIsNeverSkipped() {
+        val stream = Gated(holdCancel = true)
+        val adapter = StreamAdapter(stream)
+        val canceller = Thread { adapter.cancel() }.apply { start() }
+        stream.cancelEntered.await()
+        val closer = Thread { adapter.close() }.apply { start() }
+        // while the cancel runs, close does not reach the stream (an early close would
+        // show here; a correct one is never failed by this wait)
+        closer.join(200)
+        assertEquals(listOf("cancel begins"), stream.calls.toList())
+        // and a cancel that comes now is dropped at once, without waiting for anything
+        adapter.cancel()
+        stream.release.countDown()
+        canceller.join(10_000)
+        closer.join(10_000)
+        assertEquals(listOf("cancel begins", "cancel ends", "close begins", "close ends"), stream.calls.toList())
+    }
+
+    @Test
+    fun aCancelNeverWaitsForASlowClose() {
+        val stream = Gated(holdClose = true)
+        val adapter = StreamAdapter(stream)
+        val closer = Thread { adapter.close() }.apply { start() }
+        stream.closeEntered.await()
+        val cancel = Thread { adapter.cancel() }.apply { start() }
+        cancel.join(10_000)
+        assertTrue("cancel waited for close", !cancel.isAlive)
+        stream.release.countDown()
+        closer.join(10_000)
+        assertEquals(listOf("close begins", "close ends"), stream.calls.toList())
+    }
+
+    @Test
+    fun noCancelReachesTheStreamOnceCloseBegan() {
+        repeat(200) {
+            val stream = Gated()
+            val adapter = StreamAdapter(stream)
+            val start = java.util.concurrent.CountDownLatch(1)
+            val cancels = List(4) {
+                Thread {
+                    start.await()
+                    repeat(50) { adapter.cancel() }
+                }.apply { start() }
+            }
+            start.countDown()
+            adapter.close()
+            cancels.forEach { it.join(10_000) }
+            val calls = stream.calls.toList()
+            val closeAt = calls.indexOf("close begins")
+            assertTrue(calls.toString(), closeAt >= 0)
+            assertEquals(calls.toString(), listOf("close begins", "close ends"), calls.subList(closeAt, calls.size))
+            assertEquals(calls.count { it == "cancel begins" }, calls.count { it == "cancel ends" })
+        }
     }
 
     @Test

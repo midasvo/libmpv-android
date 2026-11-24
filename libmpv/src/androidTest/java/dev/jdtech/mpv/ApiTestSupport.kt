@@ -65,22 +65,30 @@ internal object ApiTestSupport {
 /**
  * An [MpvStream] over [data] that records every call. [blockReads] makes each read wait
  * until [cancel] (and records that it was blocked), as a stalled network read would.
+ * [holdClose] makes [close] wait for that latch; [failFirstSeek] makes mpv's seekability
+ * probe fail.
  */
 internal class RecordingStream(
     private val data: ByteArray,
     private val blockReads: Boolean = false,
     private val failReadsAfter: Int = Int.MAX_VALUE,
     private val maxRead: Int = Int.MAX_VALUE,
+    private val holdClose: CountDownLatch? = null,
+    private val failFirstSeek: Boolean = false,
 ) : MpvStream {
     val calls: MutableList<String> = CopyOnWriteArrayList()
     val closed = CountDownLatch(1)
+    val closeReturned = CountDownLatch(1)
     val readBlocked = CountDownLatch(1)
     val cancelled = CountDownLatch(1)
     /** The Java threads the calls came on: mpv's own, attached by libplayer. */
     val threads: MutableSet<Thread> = java.util.Collections.synchronizedSet(mutableSetOf())
+    /** The thread [cancel] came on. */
+    val cancelThread = java.util.concurrent.atomic.AtomicReference<Thread?>()
 
     @Volatile private var position = 0
     @Volatile private var isClosed = false
+    @Volatile private var seeks = 0
 
     private fun record(call: String) {
         if (isClosed) calls += "AFTER CLOSE: $call"
@@ -105,6 +113,7 @@ internal class RecordingStream(
 
     override fun seek(position: Long): Long {
         record("seek $position")
+        if (failFirstSeek && seeks++ == 0) throw IOException("cannot tell yet")
         if (position > data.size) throw IOException("past the end")
         this.position = position.toInt()
         return position
@@ -116,8 +125,10 @@ internal class RecordingStream(
     }
 
     override fun cancel() {
-        // may come after close (stream_cb.h allows it); the adapter filters that out
+        // libplayer never calls it once close has begun; record it if it did
+        if (isClosed) calls += "AFTER CLOSE: cancel"
         calls += "cancel"
+        cancelThread.set(Thread.currentThread())
         cancelled.countDown()
     }
 
@@ -125,5 +136,8 @@ internal class RecordingStream(
         record("close")
         isClosed = true
         closed.countDown()
+        holdClose?.await(TestMpv.TIMEOUT_SECONDS * 2, TimeUnit.SECONDS)
+        calls += "close returned"
+        closeReturned.countDown()
     }
 }

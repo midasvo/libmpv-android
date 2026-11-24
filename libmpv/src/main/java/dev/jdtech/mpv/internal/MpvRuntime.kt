@@ -198,7 +198,9 @@ internal class MpvRuntime(
 
     /**
      * After mpv_terminate_destroy: the event thread is gone, so no reply or event comes
-     * anymore. Pending requests fail with IllegalStateException; flows complete.
+     * anymore. Pending requests fail with IllegalStateException; flows complete. Every
+     * [MPVLib.destroy] that returns calls it, so it may run more than once (also at the
+     * same time): each request is failed, and each flow ended, exactly once.
      */
     fun onDestroyed() {
         destroyed = true

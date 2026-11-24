@@ -26,6 +26,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 @Suppress("unused")
 class MPVLib private constructor(nativePtr: Long) {
+    // Volatile: read by every thread that calls in, written by create and destroy.
+    @Volatile
     private var nativeInstance: Long = 0
     // Copy-on-write so observers may add or remove observers from inside a callback.
     private val observers = CopyOnWriteArrayList<EventObserver>()
@@ -79,11 +81,21 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeInit(instance: Long)
 
+    /**
+     * Destroys the instance: stops mpv's event thread, closes every custom stream and
+     * destroys mpv (mpv_terminate_destroy). Returns once all of that is done; if another
+     * thread is destroying the instance already, it waits for that thread to finish.
+     * Throws [IllegalStateException] (and changes nothing) when called from an observer
+     * callback or a stream callback of this instance, which the teardown waits for.
+     */
     fun destroy() {
-        if (nativeInstance != 0L) {
-            nativeDestroy(nativeInstance)
+        val handle = nativeInstance
+        if (handle != 0L) {
+            // returns after the teardown, also when another thread is doing it
+            nativeDestroy(handle)
             nativeInstance = 0L
             // no reply or event can come anymore: fail the pending calls, end the flows
+            // (idempotent: each concurrent destroy() runs it, so each returns after it)
             runtime.onDestroyed()
         }
     }

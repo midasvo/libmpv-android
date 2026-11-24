@@ -113,6 +113,9 @@ class MPVLibAsyncTest {
                 call.join()
                 assertTrue(call.isCancelled)
                 withContext(Dispatchers.IO) { ApiTestSupport.await(stalled.cancelled, "the stream's cancel") }
+                // not on the thread that cancelled the coroutine (it held mpv's abort lock and the
+                // instance's gate in mpv_abort_async_command), on libplayer's own
+                assertEquals("mpv-stream-cancel", stalled.cancelThread.get()?.name)
                 eventually { mpv.runtime.ignoredReplies.get() > ignoredBefore }
                 withContext(Dispatchers.IO) { ApiTestSupport.await(stalled.closed, "the stream's close") }
                 // still usable

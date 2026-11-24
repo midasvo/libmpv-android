@@ -398,7 +398,12 @@ impl Vm {
         THREAD_ATTACHMENT.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.is_none() {
-                *slot = self.attach_current_thread();
+                // named after the Rust thread if it has a name (the stream
+                // canceller does; mpv's threads, made in C, do not)
+                let name = std::thread::current()
+                    .name()
+                    .and_then(|n| CString::new(n).ok());
+                *slot = self.attach_named(name.as_deref());
             }
             // f cannot reach this slot again: the thread is attached now, so a
             // nested call takes the current_env path above
@@ -418,8 +423,25 @@ impl Vm {
 
     /// Attaches the current thread until the returned guard is dropped.
     pub fn attach_current_thread(self) -> Option<Attached> {
+        self.attach_named(None)
+    }
+
+    /// Like `attach_current_thread`, with `name` as the java.lang.Thread's
+    /// name (the VM picks one if it is `None`).
+    pub fn attach_named(self, name: Option<&CStr>) -> Option<Attached> {
         let mut env: *mut c_void = ptr::null_mut();
-        let r = invoke!(self, AttachCurrentThread, &mut env, ptr::null_mut());
+        let mut args = JavaVMAttachArgs {
+            version: JNI_VERSION_1_6,
+            name: name.map_or(ptr::null_mut(), |n| n.as_ptr().cast_mut()),
+            group: ptr::null_mut(),
+        };
+        // no arguments at all for unnamed threads, exactly as before
+        let args: *mut c_void = if name.is_some() {
+            (&raw mut args).cast()
+        } else {
+            ptr::null_mut()
+        };
+        let r = invoke!(self, AttachCurrentThread, &mut env, args);
         if r != JNI_OK || env.is_null() {
             return None;
         }

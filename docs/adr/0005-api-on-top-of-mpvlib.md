@@ -54,6 +54,14 @@ How it is built (details in the module docs of `node.rs`, `observations.rs`, `st
   `close_fn`, and a protocol's `open_fn` while the instance is being destroyed. The ids are never
   reused, so a late call finds nothing instead of freed memory. A stream callback that calls back
   into the same instance (which deadlocks mpv) throws `IllegalStateException`.
+- **`MpvStream.cancel` runs on a thread of our own.** mpv calls `cancel_fn` on whichever thread
+  triggers the cancellation, with its abort lock held: the thread that cancels a coroutine
+  (`mpv_abort_async_command`) or the one that calls `destroy()`. Running app code there would let a
+  slow `cancel` stall `destroy()`. `cancel_fn` only queues the request; one thread
+  ("mpv-stream-cancel") runs the cancellations in order.
+- **`destroy()` returns only after the teardown, for every caller.** A second concurrent
+  `destroy()` waits for the first instead of returning at once, so no caller sees a stream still
+  open or a pending call still unanswered after its `destroy()` returned.
 - **`kotlinx-coroutines-core` is an `api` dependency**, because `suspend` functions and `Flow` are in
   the public signatures.
 - **The public API is a checked-in contract:** `libmpv/api/libmpv.api`, compared with the built AAR

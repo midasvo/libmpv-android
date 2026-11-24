@@ -129,6 +129,31 @@ class MpvRuntimeTest {
         assertEquals(1, native.calls.size)
     }
 
+    /** Every destroy() that returns runs onDestroyed, possibly at the same time. */
+    @Test
+    fun onDestroyedMayRunConcurrentlyAndActsOnce() = run {
+        val pending = (1..50).map {
+            async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { runtime.request("op", abortable = false) { _, _ -> } }
+            }
+        }
+        val flow = async(start = CoroutineStart.UNDISPATCHED) {
+            runtime.propertyFlow("x", MpvFormat.MPV_FORMAT_DOUBLE) { it }.toList()
+        }
+        val start = java.util.concurrent.CountDownLatch(1)
+        val destroyers = List(4) {
+            Thread {
+                start.await()
+                runtime.onDestroyed()
+            }.apply { start() }
+        }
+        start.countDown()
+        destroyers.forEach { it.join(10_000) }
+        for (call in pending) assertTrue(call.await().exceptionOrNull() is IllegalStateException)
+        assertEquals(emptyList<Any?>(), flow.await())
+        assertEquals("unobserved once", 1, native.calls.count { it.startsWith("unobserve") })
+    }
+
     @Test
     fun destroyFailsPendingRequestsAndRefusesNewOnes() = run {
         val pending = async(start = CoroutineStart.UNDISPATCHED) {
