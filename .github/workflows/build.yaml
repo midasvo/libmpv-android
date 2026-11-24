@@ -55,7 +55,7 @@ env:
 jobs:
   native:
     name: Native (${{ matrix.abi }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -169,7 +169,7 @@ jobs:
   assemble:
     name: Assemble
     needs: native
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -306,7 +306,7 @@ jobs:
   test:
     name: Instrumented tests
     needs: assemble
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -391,7 +391,7 @@ jobs:
   sources:
     name: Corresponding source
     needs: native
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -474,7 +474,7 @@ jobs:
     name: Build
     needs: [native, assemble, test, sources]
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Check every job succeeded
         env:

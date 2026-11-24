@@ -31,7 +31,7 @@ concurrency:
 jobs:
   guard:
     name: Check tag
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     if: ${{ github.repository == 'midasvo/libmpv-android' }}
     outputs:
       version: ${{ steps.check.outputs.version }}
@@ -102,7 +102,7 @@ jobs:
     # secrets, nothing published.
     name: ${{ needs.guard.outputs.dry-run == 'false' && 'Publish' || 'Publish (dry run)' }}
     needs: [guard, build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: ${{ needs.guard.outputs.dry-run == 'false' && 'release' || '' }}
     permissions:
       contents: write # create the draft GitHub release (the repo default token is read-only)
