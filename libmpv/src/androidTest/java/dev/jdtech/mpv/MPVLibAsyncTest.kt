@@ -47,6 +47,44 @@ class MPVLibAsyncTest {
         }
     }
 
+    /** The typed variants of getPropertyAsync: mpv's value in the format asked for, unwrapped. */
+    @Test
+    fun typedReads() = TestMpv.withMpv { mpv ->
+        test {
+            mpv.setPropertyAsync("speed", MpvNode.DoubleValue(1.5))
+            assertEquals(1.5, mpv.getDoublePropertyAsync("speed"), 0.0)
+            mpv.setPropertyAsync("mute", MpvNode.FlagValue(true))
+            assertEquals(true, mpv.getBooleanPropertyAsync("mute"))
+            mpv.setPropertyInt("osd-duration", 1234)
+            assertEquals(1234L, mpv.getLongPropertyAsync("osd-duration"))
+            // beyond 32 bits, unlike getPropertyInt
+            mpv.setPropertyString("demuxer-max-bytes", "3000000000")
+            assertEquals(3_000_000_000L, mpv.getLongPropertyAsync("demuxer-max-bytes"))
+            val title = "async 🎵 Ünïcödé"
+            mpv.setPropertyString("title", title)
+            assertEquals(title, mpv.getStringPropertyAsync("title"))
+            // a string is mpv's own formatting of any property, as getPropertyString's
+            assertEquals(mpv.getPropertyString("mute"), mpv.getStringPropertyAsync("mute"))
+            assertEquals(mpv.getPropertyString("speed"), mpv.getStringPropertyAsync("speed"))
+            // and an int64 read of a double property is converted by mpv, not refused
+            assertEquals(mpv.getPropertyLong("speed"), mpv.getLongPropertyAsync("speed"))
+
+            assertEquals(
+                MPVLib.MpvError.MPV_ERROR_PROPERTY_UNAVAILABLE,
+                mpvError { mpv.getDoublePropertyAsync("duration") },
+            )
+            assertEquals(
+                MPVLib.MpvError.MPV_ERROR_PROPERTY_NOT_FOUND,
+                mpvError { mpv.getBooleanPropertyAsync("libmpv-test-no-such-property") },
+            )
+            // a property that has no such value: mpv's own error
+            assertEquals(
+                MPVLib.MpvError.MPV_ERROR_PROPERTY_FORMAT,
+                mpvError { mpv.getDoublePropertyAsync("mpv-version") },
+            )
+        }
+    }
+
     @Test
     fun manyConcurrentCallsGetTheirOwnReplies() = TestMpv.withMpv { mpv ->
         test {
@@ -65,7 +103,7 @@ class MPVLibAsyncTest {
                 mpv.getPropertyAsync("mpv-version")
                 val resumedOn = Thread.currentThread().name
                 assertTrue(resumedOn, resumedOn.contains("DefaultDispatcher"))
-                assertNotEquals("event_thread", resumedOn)
+                assertNotEquals("mpv-event", resumedOn)
             }
         }
     }

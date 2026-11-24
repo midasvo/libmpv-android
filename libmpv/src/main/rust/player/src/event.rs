@@ -72,6 +72,40 @@ pub enum Value<'a> {
     Unsupported(mpv_format),
 }
 
+impl Value<'_> {
+    /// The value as an `mpv_node`, pointing into the event (a string or a node
+    /// is not copied), so that it can be encoded like a node: a get-property
+    /// reply in a scalar format reaches Kotlin as the matching scalar node.
+    /// `Unsupported` is `MPV_FORMAT_NONE`.
+    pub fn as_node(&self) -> mpv_node {
+        match *self {
+            Value::None | Value::Unsupported(_) => mpv_node::NONE,
+            Value::Flag(z) => mpv_node {
+                u: mpv_node_u {
+                    flag: c_int::from(z),
+                },
+                format: MPV_FORMAT_FLAG,
+            },
+            Value::Int64(int64) => mpv_node {
+                u: mpv_node_u { int64 },
+                format: MPV_FORMAT_INT64,
+            },
+            Value::Double(double_) => mpv_node {
+                u: mpv_node_u { double_ },
+                format: MPV_FORMAT_DOUBLE,
+            },
+            // only read through: node::encode never writes to a node
+            Value::String(s) => mpv_node {
+                u: mpv_node_u {
+                    string: s.as_ptr().cast_mut(),
+                },
+                format: MPV_FORMAT_STRING,
+            },
+            Value::Node(n) => *n.0,
+        }
+    }
+}
+
 /// An `mpv_node` inside an event; compared by address in tests.
 #[derive(Clone, Copy)]
 pub struct NodeRef<'a>(pub &'a mpv_node);
@@ -201,6 +235,18 @@ pub unsafe fn decode<'a>(ev: &'a mpv_event) -> Option<Event<'a>> {
             id => Some(Event::Other(id)),
         }
     }
+}
+
+/// The default `logcat_level`: every message mpv sends is echoed, as before
+/// `setLogcatLevel` existed.
+pub const LOGCAT_ALL: c_int = c_int::MAX;
+
+/// Whether a message of mpv's `log_level` is echoed to logcat when the most
+/// verbose level to echo is `max` (one of mpv's levels; `MPV_LOG_LEVEL_NONE`,
+/// 0, echoes nothing, since every message has a level of at least
+/// `MPV_LOG_LEVEL_FATAL`).
+pub fn echo_to_logcat(log_level: c_int, max: c_int) -> bool {
+    log_level > MPV_LOG_LEVEL_NONE && log_level <= max
 }
 
 /// The logcat priority for an mpv log level, so messages keep their severity.
@@ -501,6 +547,75 @@ mod tests {
         assert_eq!(android_priority(70), ANDROID_LOG_VERBOSE);
         assert_eq!(android_priority(0), ANDROID_LOG_VERBOSE);
         assert_eq!(android_priority(-1), ANDROID_LOG_VERBOSE);
+    }
+
+    #[test]
+    fn the_logcat_echo_follows_its_level() {
+        // the default echoes every level, as before
+        for level in [10, 20, 30, 40, 50, 60, 70] {
+            assert!(echo_to_logcat(level, LOGCAT_ALL), "{level}");
+        }
+        // warn: errors and warnings only, so no "v" message with a URL in it
+        assert!(echo_to_logcat(MPV_LOG_LEVEL_FATAL, MPV_LOG_LEVEL_WARN));
+        assert!(echo_to_logcat(MPV_LOG_LEVEL_WARN, MPV_LOG_LEVEL_WARN));
+        assert!(!echo_to_logcat(MPV_LOG_LEVEL_INFO, MPV_LOG_LEVEL_WARN));
+        assert!(!echo_to_logcat(MPV_LOG_LEVEL_V, MPV_LOG_LEVEL_WARN));
+        // none: nothing at all
+        for level in [10, 20, 30, 40, 50, 60, 70] {
+            assert!(!echo_to_logcat(level, MPV_LOG_LEVEL_NONE), "{level}");
+        }
+        assert!(
+            !echo_to_logcat(0, LOGCAT_ALL),
+            "a message never has level none"
+        );
+    }
+
+    /// What `node::encode` makes of `value.as_node()`.
+    fn reply_bytes(value: &Value<'_>) -> Vec<u8> {
+        let mut out = Vec::new();
+        unsafe { crate::node::encode(&value.as_node(), &mut out) }.unwrap();
+        out
+    }
+
+    #[test]
+    fn typed_replies_are_passed_on_as_scalar_nodes() {
+        let mut double: f64 = 1.5;
+        let mut prop = property(c"speed", MPV_FORMAT_DOUBLE, (&raw mut double).cast());
+        let mut ev = event(MPV_EVENT_GET_PROPERTY_REPLY, (&raw mut prop).cast());
+        ev.reply_userdata = 4;
+        let Some(Event::GetPropertyReply { value, .. }) = (unsafe { decode(&ev) }) else {
+            panic!("not a reply");
+        };
+        let mut expected = vec![MPV_FORMAT_DOUBLE as u8];
+        expected.extend_from_slice(&1.5f64.to_bits().to_be_bytes());
+        assert_eq!(reply_bytes(&value), expected);
+
+        let mut int: i64 = -6_000_000_000;
+        let mut expected = vec![MPV_FORMAT_INT64 as u8];
+        expected.extend_from_slice(&(-6_000_000_000i64).to_be_bytes());
+        assert_eq!(reply_bytes(&Value::Int64(int)), expected);
+        int += 1;
+        assert_ne!(reply_bytes(&Value::Int64(int)), expected);
+
+        assert_eq!(reply_bytes(&Value::Flag(true)), [MPV_FORMAT_FLAG as u8, 1]);
+        assert_eq!(reply_bytes(&Value::Flag(false)), [MPV_FORMAT_FLAG as u8, 0]);
+        // a string as UTF-16, like every string node
+        assert_eq!(
+            reply_bytes(&Value::String(c"é")),
+            [MPV_FORMAT_STRING as u8, 0, 0, 0, 1, 0x00, 0xE9]
+        );
+        assert_eq!(reply_bytes(&Value::None), [MPV_FORMAT_NONE as u8]);
+        assert_eq!(reply_bytes(&Value::Unsupported(2)), [MPV_FORMAT_NONE as u8]);
+
+        // a node is passed through as it is
+        let node = mpv_node {
+            u: mpv_node_u { int64: 7 },
+            format: MPV_FORMAT_INT64,
+        };
+        assert_eq!(
+            reply_bytes(&Value::Node(NodeRef(&node))),
+            reply_bytes(&Value::Int64(7))
+        );
     }
 
     #[test]

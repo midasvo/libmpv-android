@@ -1,7 +1,9 @@
 package dev.jdtech.mpv
 
+import android.os.Process
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -61,14 +63,14 @@ class MPVLibLifecycleTest {
 
             // mpv sends an initial change event when a property is observed
             mpv.observeProperty("volume", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
-            assertTrue("no initial volume event received", firstEvent.await(5, TimeUnit.SECONDS))
+            assertTrue("no initial volume event received", firstEvent.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
             assertDestroyRefused(thrown.get())
 
             // the instance and its event thread still work
             assertNotNull(mpv.getPropertyString("mpv-version"))
             mpv.setPropertyDouble("volume", 50.0)
             assertTrue("event thread stopped after the refused destroy()",
-                secondEvent.await(5, TimeUnit.SECONDS))
+                secondEvent.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
         } finally {
             mpv.destroy()
         }
@@ -97,7 +99,7 @@ class MPVLibLifecycleTest {
             })
             mpv.command(arrayOf("print-text", "libmpv lifecycle test"))
 
-            assertTrue("no log message received", called.await(5, TimeUnit.SECONDS))
+            assertTrue("no log message received", called.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
             assertDestroyRefused(thrown.get())
             assertNotNull(mpv.getPropertyString("mpv-version"))
         } finally {
@@ -144,6 +146,52 @@ class MPVLibLifecycleTest {
         val uninitialized = MPVLib.create(context) ?: throw AssertionError("MPVLib.create returned null")
         uninitialized.destroy()
         uninitialized.destroy()
+    }
+
+    /** MPVLib is AutoCloseable: `use` destroys it, also when the block throws. */
+    @Test
+    fun useDestroysTheInstance() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val mpv = MPVLib.create(context) ?: throw AssertionError("MPVLib.create returned null")
+        val version = mpv.use {
+            assertEquals(0, it.setOptionString("vo", "null"))
+            assertEquals(0, it.setOptionString("ao", "null"))
+            it.init()
+            it.getPropertyString("mpv-version")
+        }
+        assertTrue("$version", version!!.startsWith("mpv "))
+        assertThrows(IllegalStateException::class.java) { mpv.getPropertyString("mpv-version") }
+        mpv.close() // a second close, like a second destroy(): nothing to do
+
+        val failing = MPVLib.create(context) ?: throw AssertionError("MPVLib.create returned null")
+        val thrown = assertThrows(IllegalArgumentException::class.java) {
+            failing.use { throw IllegalArgumentException("thrown in use") }
+        }
+        assertEquals("thrown in use", thrown.message)
+        assertThrows(IllegalStateException::class.java) { failing.getPropertyString("mpv-version") }
+    }
+
+    /**
+     * The event thread has a name that says what it is in traces and ANR dumps, both the
+     * java.lang.Thread the callbacks run on and the native thread (Linux keeps 15 bytes).
+     */
+    @Test
+    fun theEventThreadIsNamed() = TestMpv.withMpv { mpv ->
+        val javaName = AtomicReference<String?>()
+        val nativeName = AtomicReference<String?>()
+        val called = CountDownLatch(1)
+        mpv.addObserver(object : MPVLib.EventObserver {
+            override fun eventProperty(property: String, value: Double) {
+                if (property != "volume" || called.count == 0L) return
+                javaName.set(Thread.currentThread().name)
+                nativeName.set(File("/proc/self/task/${Process.myTid()}/comm").readText().trim())
+                called.countDown()
+            }
+        })
+        mpv.observeProperty("volume", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
+        assertTrue("no volume event", TestMpv.await(called))
+        assertEquals("mpv-event", javaName.get())
+        assertEquals("mpv-event", nativeName.get())
     }
 
     // Java callers can pass null where Kotlin declares String. The public methods

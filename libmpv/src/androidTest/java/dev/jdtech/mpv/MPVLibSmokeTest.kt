@@ -82,11 +82,11 @@ class MPVLibSmokeTest {
 
             // mpv sends an initial change event when a property is observed
             mpv.observeProperty("volume", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
-            assertTrue("no initial volume event received", firstEvent.await(5, TimeUnit.SECONDS))
+            assertTrue("no initial volume event received", firstEvent.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
             // change it only after the first event, so mpv cannot coalesce the two
             mpv.setPropertyDouble("volume", 50.0)
-            assertTrue("no second volume event received", secondEvent.await(5, TimeUnit.SECONDS))
+            assertTrue("no second volume event received", secondEvent.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
             assertEquals(1, selfRemovingCalls.get())
         } finally {
@@ -121,8 +121,8 @@ class MPVLibSmokeTest {
 
             mpv.command(arrayOf("loadfile", "/nonexistent/libmpv-smoke-test.mkv"))
 
-            assertTrue("no eventEndFile received", endFile.await(10, TimeUnit.SECONDS))
-            assertTrue("no event(END_FILE) after eventEndFile", endFileEvent.await(5, TimeUnit.SECONDS))
+            assertTrue("no eventEndFile received", endFile.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            assertTrue("no event(END_FILE) after eventEndFile", endFileEvent.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
             assertEquals(MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_ERROR, endReason.get())
             assertTrue("error code should be negative, was ${endError.get()}", endError.get() < 0)
         } finally {
@@ -152,7 +152,7 @@ class MPVLibSmokeTest {
 
             mpv.observeProperty("volume", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
 
-            assertTrue("observer after a throwing one got no event", latch.await(5, TimeUnit.SECONDS))
+            assertTrue("observer after a throwing one got no event", latch.await(TestMpv.TIMEOUT_SECONDS, TimeUnit.SECONDS))
         } finally {
             mpv.destroy()
         }

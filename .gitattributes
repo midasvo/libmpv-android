@@ -3,3 +3,5 @@ libmpv/api/*.api text eol=lf
 *.sh text eol=lf
 # git apply needs the patch exactly as written
 *.patch -text
+# Test fixtures are read byte for byte (vobsub.idx is text, but must stay as generated)
+libmpv/src/androidTest/assets/** -text

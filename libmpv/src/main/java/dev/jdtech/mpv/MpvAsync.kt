@@ -2,6 +2,8 @@
 
 package dev.jdtech.mpv
 
+import dev.jdtech.mpv.MPVLib.MpvError
+import dev.jdtech.mpv.MPVLib.MpvFormat
 import dev.jdtech.mpv.internal.Native
 import dev.jdtech.mpv.internal.NodeCodec
 
@@ -48,9 +50,86 @@ suspend fun MPVLib.commandAsync(args: MpvNode): MpvNode {
  * @throws IllegalStateException if the instance is or gets destroyed
  */
 suspend fun MPVLib.getPropertyAsync(name: String): MpvNode =
-    runtime.request("getPropertyAsync($name)", abortable = false) { handle, id ->
-        Native.getPropertyAsync(handle, id, name)
+    propertyAsync("getPropertyAsync", name, MpvFormat.MPV_FORMAT_NODE)
+
+/**
+ * Reads the flag property [name] (`pause`, `mute`, `eof-reached`, ...) asynchronously,
+ * without unwrapping an [MpvNode]. Maps to `mpv_get_property_async(MPV_FORMAT_FLAG)`: mpv
+ * converts the value as for [booleanPropertyFlow]. Otherwise as [getPropertyAsync].
+ *
+ * ```
+ * val paused = mpv.getBooleanPropertyAsync("pause")
+ * ```
+ *
+ * @throws MpvException with mpv's error, e.g. `MPV_ERROR_PROPERTY_UNAVAILABLE`, or
+ *   `MPV_ERROR_PROPERTY_FORMAT` if the property is not a flag
+ * @throws IllegalStateException if the instance is or gets destroyed
+ */
+suspend fun MPVLib.getBooleanPropertyAsync(name: String): Boolean =
+    typedPropertyAsync("getBooleanPropertyAsync", name, MpvFormat.MPV_FORMAT_FLAG) { it.boolean }
+
+/**
+ * Reads the integer property [name] (`playlist-pos`, `playlist-count`, ...)
+ * asynchronously. Maps to `mpv_get_property_async(MPV_FORMAT_INT64)`: mpv converts the
+ * value as for [longPropertyFlow], so a time comes back as whole seconds (use
+ * [getDoublePropertyAsync]). Otherwise as [getPropertyAsync].
+ *
+ * @throws MpvException with mpv's error, e.g. `MPV_ERROR_PROPERTY_UNAVAILABLE`, or
+ *   `MPV_ERROR_PROPERTY_FORMAT` if the property is not a number
+ * @throws IllegalStateException if the instance is or gets destroyed
+ */
+suspend fun MPVLib.getLongPropertyAsync(name: String): Long =
+    typedPropertyAsync("getLongPropertyAsync", name, MpvFormat.MPV_FORMAT_INT64) { it.long }
+
+/**
+ * Reads the numeric property [name] (`time-pos`, `duration`, `volume`, ...)
+ * asynchronously. Maps to `mpv_get_property_async(MPV_FORMAT_DOUBLE)`: mpv converts the
+ * value as for [doublePropertyFlow]. Otherwise as [getPropertyAsync].
+ *
+ * ```
+ * val position = mpv.getDoublePropertyAsync("time-pos")
+ * ```
+ *
+ * @throws MpvException with mpv's error, e.g. `MPV_ERROR_PROPERTY_UNAVAILABLE` (`duration`
+ *   while nothing is loaded), or `MPV_ERROR_PROPERTY_FORMAT` if the property is not a
+ *   number
+ * @throws IllegalStateException if the instance is or gets destroyed
+ */
+suspend fun MPVLib.getDoublePropertyAsync(name: String): Double =
+    typedPropertyAsync("getDoublePropertyAsync", name, MpvFormat.MPV_FORMAT_DOUBLE) { it.double }
+
+/**
+ * Reads property [name] formatted as a string (any property; `media-title`, `path`, ...)
+ * asynchronously. Maps to `mpv_get_property_async(MPV_FORMAT_STRING)`: the same text as
+ * [stringPropertyFlow] and [MPVLib.getPropertyString] (a structured property comes back
+ * as JSON; use [getPropertyAsync] for it). Otherwise as [getPropertyAsync].
+ *
+ * @throws MpvException with mpv's error, e.g. `MPV_ERROR_PROPERTY_UNAVAILABLE`
+ * @throws IllegalStateException if the instance is or gets destroyed
+ */
+suspend fun MPVLib.getStringPropertyAsync(name: String): String =
+    typedPropertyAsync("getStringPropertyAsync", name, MpvFormat.MPV_FORMAT_STRING) { it.string }
+
+/** One mpv_get_property_async in [format]; the value comes back as the matching node. */
+private suspend fun MPVLib.propertyAsync(operation: String, name: String, format: Int): MpvNode =
+    runtime.request("$operation($name)", abortable = false) { handle, id ->
+        Native.getPropertyAsync(handle, id, name, format)
     }
+
+/**
+ * [propertyAsync] for a scalar [format], unwrapped by [value]. mpv answers a successful
+ * read in the format asked for, so a node of another kind does not happen; it would be
+ * reported as `MPV_ERROR_PROPERTY_FORMAT`.
+ */
+private suspend inline fun <T : Any> MPVLib.typedPropertyAsync(
+    operation: String,
+    name: String,
+    format: Int,
+    value: (MpvNode) -> T?,
+): T {
+    val node = propertyAsync(operation, name, format)
+    return value(node) ?: throw MpvException(MpvError.MPV_ERROR_PROPERTY_FORMAT, "$operation($name)")
+}
 
 /**
  * Sets property [name] to [value] asynchronously, as [setPropertyNode] does. Maps to

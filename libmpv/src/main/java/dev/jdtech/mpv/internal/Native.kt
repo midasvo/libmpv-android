@@ -22,8 +22,11 @@ internal object Native {
     /** mpv_abort_async_command */
     @JvmStatic external fun abortAsyncCommand(handle: Long, id: Long)
 
-    /** mpv_get_property_async(MPV_FORMAT_NODE) */
-    @JvmStatic external fun getPropertyAsync(handle: Long, id: Long, name: String)
+    /**
+     * mpv_get_property_async in [format] (FLAG, INT64, DOUBLE, STRING or NODE): the reply
+     * comes to MPVLib.onReply with [id], its value encoded as the matching node
+     */
+    @JvmStatic external fun getPropertyAsync(handle: Long, id: Long, name: String, format: Int)
 
     /** mpv_set_property_async(MPV_FORMAT_NODE) */
     @JvmStatic external fun setPropertyAsync(handle: Long, id: Long, name: String, value: ByteArray)
@@ -42,6 +45,9 @@ internal object Native {
      * (whose ids libplayer keeps): the number removed, or a negative mpv error.
      */
     @JvmStatic external fun unobserveLegacyProperty(handle: Long, name: String): Int
+
+    /** The most verbose mpv log level libplayer also writes to logcat (an MpvLogLevel) */
+    @JvmStatic external fun setLogcatLevel(handle: Long, level: Int)
 
     /** mpv_stream_cb_add_ro */
     @JvmStatic external fun addStreamProtocol(handle: Long, protocol: String, adapter: ProtocolAdapter)

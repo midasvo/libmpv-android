@@ -155,15 +155,18 @@ class StreamAdapterTest {
         val canceller = Thread { adapter.cancel() }.apply { start() }
         stream.cancelEntered.await()
         val closer = Thread { adapter.close() }.apply { start() }
-        // while the cancel runs, close does not reach the stream (an early close would
-        // show here; a correct one is never failed by this wait)
-        closer.join(200)
+        // close() has begun once it waits for the cancel (its only wait, which it enters
+        // only after marking the adapter closed). Waiting a fixed time instead let the
+        // cancel below run before the closer had started, on a busy machine: that cancel
+        // then reached the stream and blocked on `release` itself.
+        awaitState(closer, Thread.State.WAITING)
+        // while the cancel runs, close does not reach the stream
         assertEquals(listOf("cancel begins"), stream.calls.toList())
         // and a cancel that comes now is dropped at once, without waiting for anything
         adapter.cancel()
         stream.release.countDown()
-        canceller.join(10_000)
-        closer.join(10_000)
+        joinOrFail(canceller)
+        joinOrFail(closer)
         assertEquals(listOf("cancel begins", "cancel ends", "close begins", "close ends"), stream.calls.toList())
     }
 
@@ -174,10 +177,9 @@ class StreamAdapterTest {
         val closer = Thread { adapter.close() }.apply { start() }
         stream.closeEntered.await()
         val cancel = Thread { adapter.cancel() }.apply { start() }
-        cancel.join(10_000)
-        assertTrue("cancel waited for close", !cancel.isAlive)
+        joinOrFail(cancel, "cancel waited for close")
         stream.release.countDown()
-        closer.join(10_000)
+        joinOrFail(closer)
         assertEquals(listOf("close begins", "close ends"), stream.calls.toList())
     }
 
@@ -195,13 +197,28 @@ class StreamAdapterTest {
             }
             start.countDown()
             adapter.close()
-            cancels.forEach { it.join(10_000) }
+            cancels.forEach { joinOrFail(it) }
             val calls = stream.calls.toList()
             val closeAt = calls.indexOf("close begins")
             assertTrue(calls.toString(), closeAt >= 0)
             assertEquals(calls.toString(), listOf("close begins", "close ends"), calls.subList(closeAt, calls.size))
             assertEquals(calls.count { it == "cancel begins" }, calls.count { it == "cancel ends" })
         }
+    }
+
+    /** Waits until [thread] is in [state]; fails after 10 s instead of hanging. */
+    private fun awaitState(thread: Thread, state: Thread.State) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (thread.state != state) {
+            assertTrue("$thread is ${thread.state}, never $state", System.nanoTime() < deadline)
+            Thread.yield()
+        }
+    }
+
+    /** Joins [thread], failing (rather than going on with it still running) after 10 s. */
+    private fun joinOrFail(thread: Thread, message: String = "$thread did not end") {
+        thread.join(10_000)
+        assertTrue(message, !thread.isAlive)
     }
 
     @Test

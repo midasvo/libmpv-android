@@ -2,7 +2,12 @@ package dev.jdtech.mpv
 
 import android.os.Process
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import dev.jdtech.mpv.ApiTestSupport.eventually
+import dev.jdtech.mpv.ApiTestSupport.load
+import dev.jdtech.mpv.ApiTestSupport.test
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -305,6 +310,129 @@ class MPVLibPlaybackTest {
             sub.delete()
         }
     }
+
+    /**
+     * A subtitle fixture from the test assets (`assets/subtitles`, whose README says how each
+     * was made), with what mpv must report for it. [companions] are copied next to it.
+     */
+    private class SubtitleFixture(
+        val file: String,
+        val codec: String,
+        val decoder: String,
+        /** sub-end of the fixture's one subtitle, which starts at 0 s */
+        val end: Double,
+        /** sub-text, for a text format; null for a bitmap one */
+        val text: String? = null,
+        val companions: List<String> = emptyList(),
+    )
+
+    private fun copyAsset(name: String): File {
+        val file = File(TestMpv.cacheDir, name)
+        // the test APK's own assets, not the library's
+        InstrumentationRegistry.getInstrumentation().context.assets.open("subtitles/$name").use { input ->
+            file.outputStream().use { input.copyTo(it) }
+        }
+        return file
+    }
+
+    /**
+     * Bitmap subtitles (PGS, DVD/VobSub) and MP4's text subtitles (`mov_text`): the formats
+     * [externalTextSubtitlesAreDecoded] cannot write as text, from binary fixtures of a few
+     * hundred bytes. Each is loaded as an external subtitle under a paused WAV.
+     *
+     * What this can honestly assert with `vo=null`. Nothing renders, so for the bitmap
+     * formats there is no picture to look at and no `sub-text`. Asserted is:
+     * - the track has the format's codec, and its `decoder` (which mpv sets only once it has
+     *   found and opened a decoder for the selected track) is the build's FFmpeg decoder;
+     * - the decoder produced the fixture's subtitle: `sub-start` and `sub-end`, which mpv
+     *   takes from the subtitles the decoder returned (unavailable before), become
+     *   available with the fixture's times. For PGS the end is the fixture's second display
+     *   set (10 s); for VobSub it is the SPU's own stop-display delay, which only the decoder
+     *   reads: the maximum, 65535 * 1024 / 90000 s, as FFmpeg's dvdsub encoder wrote it;
+     * - and decoded it without an error in mpv's log (subtitle or FFmpeg code). This is what
+     *   catches a broken bitmap: FFmpeg's PGS decoder still returns a subtitle, with its
+     *   times, when the bitmap's data is damaged, and only logs "Insufficient RLE data" (a
+     *   fixture damaged that way fails this test);
+     * - for `mov_text`, a text format, `sub-text` shows the text, as for the other text
+     *   formats.
+     * Whether a bitmap would look right on screen is not checked.
+     */
+    @Test
+    fun bitmapAndMp4TextSubtitlesAreDecoded() {
+        val fixtures = listOf(
+            SubtitleFixture("pgs.sup", codec = "hdmv_pgs_subtitle", decoder = "pgssub", end = 10.0),
+            SubtitleFixture(
+                "vobsub.idx", codec = "dvd_subtitle", decoder = "dvdsub", end = 65535 * 1024 / 90000.0,
+                companions = listOf("vobsub.sub"),
+            ),
+            SubtitleFixture("mov_text.mp4", codec = "mov_text", decoder = "mov_text", end = 10.0, text = "Hello mov_text"),
+        )
+        val failures = mutableListOf<String>()
+        withWav("libmpv-test-bitmap-subtitle-audio.wav", SAMPLE_RATE * 3) { wav ->
+            for (fixture in fixtures) {
+                val copies = (listOf(fixture.file) + fixture.companions).map(::copyAsset)
+                try {
+                    checkSubtitleFixture(wav, copies.first(), fixture)?.let { failures += it }
+                } finally {
+                    copies.forEach { it.delete() }
+                }
+            }
+        }
+        if (failures.isNotEmpty())
+            fail("${failures.size} of ${fixtures.size} subtitle formats failed:\n\n" + failures.joinToString("\n\n"))
+    }
+
+    /** Returns null on success, otherwise a description of what went wrong. */
+    private fun checkSubtitleFixture(wav: File, sub: File, fixture: SubtitleFixture): String? =
+        TestMpv.withMpv("sub-files" to sub.absolutePath, "pause" to "yes") { mpv ->
+            val errors = CopyOnWriteArrayList<String>()
+            val logged = CopyOnWriteArrayList<String>()
+            mpv.addLogObserver(object : MPVLib.LogObserver {
+                override fun logMessage(prefix: String, level: Int, text: String) {
+                    logged += text.trimEnd()
+                    if (level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_ERROR &&
+                        (prefix.startsWith("sub") || prefix.startsWith("ffmpeg"))
+                    ) errors += "[$prefix] ${text.trimEnd()}"
+                }
+            })
+            val problems = mutableListOf<String>()
+            var track: MpvNode? = null
+            try {
+                test {
+                    load(mpv, wav.absolutePath)
+                    track = mpv.getPropertyNode("track-list").list.orEmpty().firstOrNull { it["type"]?.string == "sub" }
+                    // decoded while paused at 0 s, where the subtitle starts
+                    eventually { runCatching { mpv.getPropertyNode("sub-end") }.getOrNull()?.double != null }
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                problems += "sub-start/sub-end never became available: nothing was decoded"
+            }
+            // The log arrives on the event thread, after the decoder wrote it: reading `errors`
+            // now could miss an error logged just before the subtitle became available. mpv
+            // delivers its log in order, so once this marker has arrived, so has everything
+            // logged before it.
+            val barrier = "libmpv-test-log-barrier ${fixture.file}"
+            mpv.command(arrayOf("print-text", barrier))
+            test { eventually { barrier in logged } }
+            val t = track
+            when {
+                t == null -> problems += "no subtitle track"
+                t["selected"]?.boolean != true -> problems += "the subtitle track is not selected"
+                t["codec"]?.string != fixture.codec -> problems += "codec is not '${fixture.codec}'"
+                t["decoder"]?.string != fixture.decoder -> problems += "decoder is not '${fixture.decoder}'"
+            }
+            val start = mpv.getPropertyDouble("sub-start")
+            val end = mpv.getPropertyDouble("sub-end")
+            if (end != null && (start == null || Math.abs(start) > 0.01 || Math.abs(end - fixture.end) > 0.01))
+                problems += "sub-start $start and sub-end $end, expected 0.0 and ${fixture.end}"
+            if (fixture.text != null) {
+                val text = mpv.getPropertyString("sub-text")
+                if (text != fixture.text) problems += "sub-text is ${describe(text)}, expected '${fixture.text}'"
+            }
+            if (errors.isNotEmpty()) problems += "errors logged: $errors"
+            if (problems.isEmpty()) null
+            else "${fixture.file}: " + problems.joinToString("; ") + "\n  track: $t"
+        }
 
     /** The string plus its code points, so an encoding mismatch is visible in CI output. */
     private fun describe(s: String?): String =
