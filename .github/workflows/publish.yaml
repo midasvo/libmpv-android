@@ -1,35 +1,57 @@
 name: Publish
 
+# Releases a vX.Y.Z tag: guard, the same build as every pull request (build.yaml, called
+# with release: true, so no caches), then signing, provenance, the draft GitHub release
+# and, last, the Maven Central upload. See RELEASING.md.
+#
+# Dry run: Actions → Publish → Run workflow (or `gh workflow run publish.yaml -f version=X.Y.Z`)
+# runs every step with the same commands, except that it signs with a throwaway key,
+# publishes to the runner's local Maven repository, and creates no attestation and no
+# release. It uses no environment and no secret.
+
 on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to rehearse (dry run; must not be on Maven Central yet)
+        type: string
+        default: 0.0.0
+
+permissions:
+  contents: read
+
+# Two runs for the same tag (a re-pushed tag) must not overlap: queue, never cancel
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish
-    runs-on: ubuntu-latest
-    environment: release
+  guard:
+    name: Check tag
+    runs-on: ubuntu-24.04
     if: ${{ github.repository == 'midasvo/libmpv-android' }}
-    # two runs for the same tag (a re-pushed tag) must not overlap: queue, never cancel
-    concurrency:
-      group: publish-${{ github.ref }}
-      cancel-in-progress: false
-    permissions:
-      contents: write # create the draft GitHub release (the repo default token is read-only)
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      dry-run: ${{ steps.check.outputs.dry-run }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # release notes need the merge-base with upstream
+          fetch-depth: 0
 
-      # Maven Central releases cannot be undone: only publish clean semver tags
-      # whose commit is on main and whose version is not on Maven Central yet
-      # (a moved or re-pushed tag must not touch the release or upload again).
+      # Maven Central releases cannot be undone: only publish clean semver tags whose
+      # commit is on main and whose version is not on Maven Central yet (a moved or
+      # re-pushed tag must not touch the release or upload again).
       # FETCH_HEAD is used because a tag checkout may have no origin/main ref.
+      # Only a tag push is a real release; everything else is a dry run.
       - name: Check tag
+        id: check
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+          DRY_RUN: ${{ github.event_name == 'push' && github.ref_type == 'tag' && 'false' || 'true' }}
         run: |
           semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           if ! [[ "$TAG" =~ $semver ]]; then
@@ -38,8 +60,12 @@ jobs:
           fi
           git fetch --quiet origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-            echo "::error::Tag '$TAG' ($GITHUB_SHA) is not on main; tag a commit that is merged into main"
-            exit 1
+            if [ "$DRY_RUN" = true ]; then
+              echo "::warning::$GITHUB_SHA is not on main; a real release of it would stop here"
+            else
+              echo "::error::Tag '$TAG' ($GITHUB_SHA) is not on main; tag a commit that is merged into main"
+              exit 1
+            fi
           fi
           version="${TAG#v}"
           pom="https://repo1.maven.org/maven2/io/github/midasvo/libmpv/$version/libmpv-$version.pom"
@@ -56,6 +82,41 @@ jobs:
               exit 1
               ;;
           esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dry-run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "Version $version, dry run: $DRY_RUN"
+
+  # No secrets are passed to the build.
+  build:
+    name: Build
+    needs: guard
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yaml
+    with:
+      release: true
+      version: ${{ needs.guard.outputs.version }}
+
+  publish:
+    # Anything but an explicit 'false' from the guard is a dry run: no environment, no
+    # secrets, nothing published.
+    name: ${{ needs.guard.outputs.dry-run == 'false' && 'Publish' || 'Publish (dry run)' }}
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    environment: ${{ needs.guard.outputs.dry-run == 'false' && 'release' || '' }}
+    permissions:
+      contents: write # create the draft GitHub release (the repo default token is read-only)
+      id-token: write # provenance attestation (Sigstore certificate)
+      attestations: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      TAG: v${{ needs.guard.outputs.version }}
+      DRY_RUN: ${{ needs.guard.outputs.dry-run == 'false' && 'false' || 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release notes need the merge-base with upstream
 
       - name: Setup Java JDK
         uses: actions/setup-java@v6
@@ -65,87 +126,99 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-disabled: true
 
-      - name: Symlink SDK
-        working-directory: ./buildscripts
-        run: |
-          mkdir sdk
-          ln -s ${ANDROID_HOME} ./sdk/android-sdk-linux
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf pkgconf libtool ninja-build python3-pip python3-jinja2 gperf nasm
-          sudo pip3 install --break-system-packages meson
-
-      - name: Download dependencies
-        working-directory: ./buildscripts
+      - name: Install SDK
+        working-directory: buildscripts
         env:
           IN_CI: 1
-          # retries for flaky hosts (lua.org TLS dropped a main build); download-deps.sh reads $WGET
-          WGET: wget --tries=5 --waitretry=10 --retry-connrefused --retry-on-host-error
-        run: ./download.sh
+          SDK_WITHOUT_NDK: 1
+        run: ./include/download-sdk.sh
 
-      - name: Apply patches
-        working-directory: ./buildscripts
-        run: ./patch.sh
+      # What the build job bundled, checked and tested, and the files it was bundled from
+      - uses: actions/download-artifact@v8
+        with:
+          name: jniLibs
+          path: ./libmpv/src/main/jniLibs
+      - uses: actions/download-artifact@v8
+        with:
+          name: libmpv-release.aar
+          path: ${{ runner.temp }}/built
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-info
+          path: ${{ runner.temp }}/info
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-info-*
+          path: ${{ runner.temp }}/native-info
+      - uses: actions/download-artifact@v8
+        with:
+          name: sources
+          path: ${{ runner.temp }}/release
 
-      # GPL corresponding source: this repository at the tag plus every
-      # dependency exactly as it is built (downloaded and patched).
-      # Packed before the build so no build output ends up in it.
-      - name: Pack corresponding source
+      # Same mode as player.sh gives them in the build job (artifacts do not keep modes)
+      - name: Normalise file modes
+        run: find libmpv/src/main/jniLibs -type f -exec chmod 0644 {} +
+
+      - name: Make a throwaway signing key (dry run)
+        if: env.DRY_RUN == 'true'
         run: |
-          name="libmpv-${GITHUB_REF_NAME#v}-sources"
-          tar --exclude=.git --exclude=./buildscripts/sdk \
-              --transform "s,^\.,$name," -cf - . | xz -T0 -6 > "$RUNNER_TEMP/$name.tar.xz"
-          ls -lh "$RUNNER_TEMP/$name.tar.xz"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --pinentry-mode loopback --passphrase dry-run \
+              --quick-gen-key 'libmpv-android dry run (throwaway)' rsa3072 sign 1d
+          fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+          {
+            echo "DRY_RUN_SIGNING_KEY<<END_OF_KEY"
+            gpg --batch --pinentry-mode loopback --passphrase dry-run --armor --export-secret-keys "$fpr"
+            echo "END_OF_KEY"
+            echo "DRY_RUN_SIGNING_KEY_ID=${fpr: -8}"
+          } >> "$GITHUB_ENV"
 
-      - name: Build
-        working-directory: ./buildscripts
-        run: ./build.sh
-
-      # The AAR from this step is the one that ships: it is checked, attached
-      # to the release and uploaded to Maven Central. build.sh's own AAR is not
-      # used: Gradle runs there with build.sh's environment, so a run here
-      # recompiles the wrapper (libplayer.so gets a different build ID).
+      # The AAR that ships is the one the build job checked and tested: Gradle bundles it
+      # again here (from the same jniLibs) only to sign it, and the bytes must match.
       - name: Bundle and sign
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ env.DRY_RUN == 'false' && secrets.SIGNING_KEY || env.DRY_RUN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ env.DRY_RUN == 'false' && secrets.SIGNING_KEY_ID || env.DRY_RUN_SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ env.DRY_RUN == 'false' && secrets.SIGNING_PASSWORD || 'dry-run' }}
         run: |
-          ./gradlew signMavenPublication --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
+          ./gradlew signMavenPublication --no-configuration-cache -PVERSION_NAME="$VERSION"
           aar=libmpv/build/outputs/aar/libmpv-release.aar
           if [ ! -f "$aar.asc" ]; then
             echo "::error::No signature found next to $aar"
             find libmpv/build -name '*.asc'
             exit 1
           fi
-          # Attached under the Maven Central name, so it pairs with its .asc
-          cp "$aar" "$RUNNER_TEMP/libmpv-${GITHUB_REF_NAME#v}.aar"
-          cp "$aar.asc" "$RUNNER_TEMP/libmpv-${GITHUB_REF_NAME#v}.aar.asc"
-          echo "AAR_SHA256=$(sha256sum "$aar" | cut -d' ' -f1)" >> "$GITHUB_ENV"
-        env:
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
-
-      - name: Check AAR
-        run: ./buildscripts/check-aar.sh
-
-      # The upload runs Gradle again. Before anything is published, make sure
-      # a fresh run reuses the signed AAR instead of building a different one.
-      - name: Check the AAR is reproducible
-        run: |
-          ./gradlew bundleReleaseAar --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
-          actual=$(sha256sum libmpv/build/outputs/aar/libmpv-release.aar | cut -d' ' -f1)
-          if [ "$actual" != "$AAR_SHA256" ]; then
-            echo "::error::A second Gradle run built a different AAR ($actual, signed one is $AAR_SHA256); the upload would not match the release"
+          built=$(sha256sum "$RUNNER_TEMP/built/libmpv-release.aar" | cut -d' ' -f1)
+          actual=$(sha256sum "$aar" | cut -d' ' -f1)
+          if [ "$actual" != "$built" ]; then
+            echo "::error::Gradle bundled a different AAR here ($actual) than the build job checked and tested ($built)"
             exit 1
           fi
+          # Attached under the Maven Central name, so it pairs with its .asc
+          cp "$aar" "$RUNNER_TEMP/release/libmpv-$VERSION.aar"
+          cp "$aar.asc" "$RUNNER_TEMP/release/libmpv-$VERSION.aar.asc"
+          cp "$RUNNER_TEMP/info/libmpv-$VERSION.cdx.json" "$RUNNER_TEMP/release/"
+          echo "AAR_SHA256=$actual" >> "$GITHUB_ENV"
+          ls -l "$RUNNER_TEMP/release"
+
+      - name: Attest build provenance
+        if: env.DRY_RUN == 'false'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release/libmpv-${{ env.VERSION }}.aar
+            ${{ runner.temp }}/release/libmpv-${{ env.VERSION }}-sources.tar.xz
 
       - name: Write release notes
         run: |
           git fetch --quiet https://github.com/jarnedemeulemeester/libmpv-android.git main
           upstream=$(git merge-base HEAD FETCH_HEAD)
           {
-            echo "\`io.github.midasvo:libmpv:${GITHUB_REF_NAME#v}\`"
+            echo "\`io.github.midasvo:libmpv:${VERSION}\`"
             echo
             echo "Based on upstream jarnedemeulemeester/libmpv-android@${upstream}."
             echo
@@ -153,40 +226,59 @@ jobs:
             echo "|---|---|"
             sed -n 's/^v_\([a-z0-9_]*\)=\(.*\)$/| \1 | \2 |/p' buildscripts/include/depinfo.sh
             echo
+            echo "Built with:"
+            echo
+            echo "| Tool | Version |"
+            echo "|---|---|"
+            cat "$RUNNER_TEMP"/native-info/*/tools.txt "$RUNNER_TEMP/info/tools-assemble.txt" | sort -u
+            echo
             echo "## Licence"
             echo
-            echo "The native libraries in this AAR are effectively **GPL-3.0-or-later** (\`libmpv.so\` links FFmpeg and other GPL components). Licences per component are listed in the [README](https://github.com/midasvo/libmpv-android/blob/${GITHUB_REF_NAME}/README.md#licensing)."
+            echo "The native libraries in this AAR are effectively **GPL-3.0-or-later** (\`libmpv.so\` links FFmpeg and other GPL components). Licences per component are listed in the [README](https://github.com/midasvo/libmpv-android/blob/${TAG}/README.md#licensing) and in the SBOM, \`libmpv-${VERSION}.cdx.json\` (CycloneDX)."
             echo
-            echo "The complete corresponding source of this build (this repository at \`${GITHUB_REF_NAME}\` plus every dependency as downloaded and patched) is attached as \`libmpv-${GITHUB_REF_NAME#v}-sources.tar.xz\`."
+            echo "The complete corresponding source of this build (this repository at \`${TAG}\`, every dependency as downloaded and patched, and the Rust crates of the wrapper vendored under \`libmpv/src/main/rust/vendor\`) is attached as \`libmpv-${VERSION}-sources.tar.xz\`."
             echo
-            echo "The AAR attached here is the exact file on Maven Central (\`libmpv-${GITHUB_REF_NAME#v}.aar\`, sha256 \`${AAR_SHA256}\`), and \`libmpv-${GITHUB_REF_NAME#v}.aar.asc\` is its signature."
+            echo "The AAR attached here is the exact file on Maven Central (\`libmpv-${VERSION}.aar\`, sha256 \`${AAR_SHA256}\`), and \`libmpv-${VERSION}.aar.asc\` is its signature. Its build provenance can be checked with \`gh attestation verify libmpv-${VERSION}.aar -R midasvo/libmpv-android\`."
           } > release-notes.md
           cat release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create release
-        uses: softprops/action-gh-release@v3
-        with:
-          draft: true
-          body_path: release-notes.md
-          files: |
-            ${{ runner.temp }}/libmpv-*.aar
-            ${{ runner.temp }}/libmpv-*.aar.asc
-            ${{ runner.temp }}/libmpv-*-sources.tar.xz
-
-      # Last on purpose: the upload to Maven Central cannot be undone, so
-      # everything that can fail (checks, notes, the release with the GPL
-      # source) comes first.
-      - name: Publish to Maven Central
+      # A re-run after a failure before the upload finds its own draft and updates it
+      - name: Create the draft release
+        if: env.DRY_RUN == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ./gradlew publishToMavenCentral --no-configuration-cache -PVERSION_NAME="${GITHUB_REF_NAME#v}"
+          files=("$RUNNER_TEMP"/release/*)
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::Release $TAG is already published; release the next version instead"
+              exit 1
+            fi
+            gh release edit "$TAG" --notes-file release-notes.md
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" \
+              --notes-file release-notes.md "${files[@]}"
+          fi
+
+      # Last on purpose: the upload to Maven Central cannot be undone, so everything that
+      # can fail (checks, notes, the release with the GPL source) comes first.
+      - name: ${{ env.DRY_RUN == 'false' && 'Publish to Maven Central' || 'Publish to the local Maven repository (dry run)' }}
+        env:
+          TASK: ${{ env.DRY_RUN == 'false' && 'publishToMavenCentral' || 'publishToMavenLocal' }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ env.DRY_RUN == 'false' && secrets.OSSRH_USERNAME || '' }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ env.DRY_RUN == 'false' && secrets.OSSRH_PASSWORD || '' }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ env.DRY_RUN == 'false' && secrets.SIGNING_KEY || env.DRY_RUN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ env.DRY_RUN == 'false' && secrets.SIGNING_KEY_ID || env.DRY_RUN_SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ env.DRY_RUN == 'false' && secrets.SIGNING_PASSWORD || 'dry-run' }}
+        run: |
+          ./gradlew "$TASK" --no-configuration-cache -PVERSION_NAME="$VERSION"
           actual=$(sha256sum libmpv/build/outputs/aar/libmpv-release.aar | cut -d' ' -f1)
           if [ "$actual" != "$AAR_SHA256" ]; then
             echo "::error::The uploaded AAR ($actual) is not the one on the draft release ($AAR_SHA256). Replace the release's AAR and .asc with the files from repo1.maven.org before publishing the release."
             exit 1
           fi
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.OSSRH_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.OSSRH_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+          if [ "$DRY_RUN" = true ]; then
+            ls -l ~/.m2/repository/io/github/midasvo/libmpv/"$VERSION"/
+          fi

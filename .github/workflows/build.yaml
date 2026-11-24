@@ -1,25 +1,175 @@
 name: Build libmpv-android
 
-on: 
+# The one build definition. Pull requests, main and sync-upstream.yaml (workflow_dispatch)
+# run it directly; publish.yaml calls it (workflow_call, release: true) and adds only what
+# a release does on top: signing, the GitHub release and the Maven Central upload.
+#
+#   native (x4, parallel) ──┬── assemble ── test ──┐
+#                           └── sources ───────────┴── Build (the required check)
+#
+# native:   libmpv and its dependencies for one ABI (build.sh --arch <a> mpv), cached per
+#           ABI except in release builds. Hands on prefix/<abi>/lib/*.so, the hashes of
+#           the sources it was built from and the tool versions.
+# assemble: builds the Rust wrapper for the four ABIs (player.sh, which also fills
+#           jniLibs), bundles the AAR with Gradle (packaging only), checks it, writes the
+#           SBOM. Hands on the AAR and the jniLibs it was bundled from.
+# test:     bundles the AAR again from those jniLibs and checks the bytes match (what
+#           publish.yaml relies on), then runs the instrumented tests on an x86_64 emulator.
+# sources:  the GPL corresponding source (dependencies as downloaded and patched, Rust
+#           crates vendored), checked to be exactly what every ABI was built from.
+
+on:
   push:
     branches:
       - main
   pull_request:
   workflow_dispatch: # used by sync-upstream.yaml, whose PRs don't trigger pull_request
+  workflow_call:
+    inputs:
+      release:
+        description: "Release build: no caches, and the source tarball is uploaded"
+        type: boolean
+        default: false
+      version:
+        description: Version to bundle (VERSION_NAME)
+        type: string
+        default: 0.0.0-ci
 
 permissions:
   contents: read
 
-# Cancel superseded runs on pull requests only; every other run (main,
-# workflow_dispatch) gets its own group and always finishes.
+# Cancel superseded runs on pull requests only; every other run (main, workflow_dispatch,
+# a release calling this) gets its own group and always finishes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  VERSION: ${{ inputs.version || '0.0.0-ci' }}
+  RELEASE: ${{ inputs.release && 'true' || 'false' }}
+  # retries for flaky hosts (lua.org TLS dropped a main build); the download scripts read $WGET
+  WGET: wget --tries=5 --waitretry=10 --retry-connrefused --retry-on-host-error
+  # Bump to throw away every cached native build (e.g. after an upstream re-tagged a release)
+  NATIVE_CACHE_EPOCH: 1
+
 jobs:
-  build:
-    name: Build
-    runs-on: ubuntu-latest
+  native:
+    name: Native (${{ matrix.abi }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: armv7l, abi: armeabi-v7a }
+          - { arch: arm64, abi: arm64-v8a }
+          - { arch: x86, abi: x86 }
+          - { arch: x86_64, abi: x86_64 }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Everything that decides what lands in prefix/<abi>: versions and checksums
+      # (depinfo.sh, also the NDK and meson), the download, patch and build scripts, the
+      # patches, the host tool list (include/install-system-deps.sh) and the runner OS.
+      # player.sh and mpv-android.sh only run after the prefix is built, so they are left out.
+      - name: Compute the cache key
+        id: key
+        run: |
+          . buildscripts/include/depinfo.sh
+          echo "key=native-$NATIVE_CACHE_EPOCH-${{ matrix.abi }}-$ImageOS-ndk$v_ndk-meson$v_meson-${{ hashFiles('buildscripts/include/**', 'buildscripts/build.sh', 'buildscripts/download.sh', 'buildscripts/patch.sh', 'buildscripts/scripts/**', '!buildscripts/scripts/player.sh', '!buildscripts/scripts/mpv-android.sh', 'buildscripts/patches/**') }}" >> "$GITHUB_OUTPUT"
+
+      # Release builds never touch the cache: a tag run could otherwise restore what a
+      # main run saved. Pull-request runs only see their own caches and main's.
+      # Only what later jobs use is cached (the shared libraries and the record of what
+      # they were built from), not the static libraries and headers of the whole prefix.
+      - name: Restore the native build
+        id: restore
+        if: ${{ !inputs.release }}
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            buildscripts/prefix/${{ matrix.abi }}/lib/*.so
+            buildscripts/prefix/${{ matrix.abi }}/sources.sha256
+            buildscripts/prefix/${{ matrix.abi }}/tools.txt
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Install tools, SDK and sources
+        if: steps.restore.outputs.cache-hit != 'true'
+        working-directory: buildscripts
+        env:
+          IN_CI: 1
+        run: ./download.sh
+
+      - name: Apply patches
+        if: steps.restore.outputs.cache-hit != 'true'
+        working-directory: buildscripts
+        run: |
+          ./patch.sh
+          ./include/hash-sources.sh > "$RUNNER_TEMP/sources.sha256"
+          cat "$RUNNER_TEMP/sources.sha256"
+
+      - name: Build
+        if: steps.restore.outputs.cache-hit != 'true'
+        working-directory: buildscripts
+        run: ./build.sh --arch ${{ matrix.arch }} mpv
+
+      # Stored in the prefix, so a cache hit reports the tools and sources of the build
+      # that produced it, not of this run.
+      - name: Record sources and tools
+        if: steps.restore.outputs.cache-hit != 'true'
+        env:
+          PREFIX: buildscripts/prefix/${{ matrix.abi }}
+        run: |
+          cp "$RUNNER_TEMP/sources.sha256" "$PREFIX/sources.sha256"
+          {
+            echo "| runner image (native builds) | $ImageOS $ImageVersion |"
+            echo "| meson | $(meson --version) |"
+            echo "| ninja | $(ninja --version) |"
+            echo "| nasm | $(nasm -v | cut -d' ' -f3) |"
+            echo "| autoconf | $(autoconf --version | head -n1 | awk '{print $NF}') |"
+            echo "| libtool | $(libtoolize --version | head -n1 | awk '{print $NF}') |"
+            echo "| pkgconf | $(pkg-config --version) |"
+            echo "| gperf | $(gperf --version | head -n1 | awk '{print $NF}') |"
+            echo "| GNU make | $(make --version | head -n1 | awk '{print $NF}') |"
+            echo "| Python | $(python3 --version | cut -d' ' -f2) |"
+          } > "$PREFIX/tools.txt"
+          cat "$PREFIX/tools.txt"
+
+      - name: Save the native build
+        if: ${{ !inputs.release && steps.restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            buildscripts/prefix/${{ matrix.abi }}/lib/*.so
+            buildscripts/prefix/${{ matrix.abi }}/sources.sha256
+            buildscripts/prefix/${{ matrix.abi }}/tools.txt
+          key: ${{ steps.key.outputs.key }}
+
+      - name: List the shared libraries
+        run: |
+          ls -lL buildscripts/prefix/${{ matrix.abi }}/lib/*.so
+          test -f buildscripts/prefix/${{ matrix.abi }}/lib/libmpv.so
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-lib-${{ matrix.abi }}
+          path: buildscripts/prefix/${{ matrix.abi }}/lib/*.so
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-info-${{ matrix.abi }}
+          path: |
+            buildscripts/prefix/${{ matrix.abi }}/sources.sha256
+            buildscripts/prefix/${{ matrix.abi }}/tools.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: Assemble
+    needs: native
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -32,61 +182,160 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-disabled: ${{ inputs.release || false }}
 
-      - name: Symlink SDK
-        working-directory: ./buildscripts
-        run: |
-          mkdir sdk
-          ln -s ${ANDROID_HOME} ./sdk/android-sdk-linux
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf pkgconf libtool ninja-build python3-pip python3-jinja2 gperf nasm
-          sudo pip3 install --break-system-packages meson
-
-      - name: Download dependencies
-        working-directory: ./buildscripts
+      - name: Install SDK and NDK
+        working-directory: buildscripts
         env:
           IN_CI: 1
-          # retries for flaky hosts (lua.org TLS dropped a main build); download-deps.sh reads $WGET
-          WGET: wget --tries=5 --waitretry=10 --retry-connrefused --retry-on-host-error
-        run: ./download.sh
+        run: ./include/download-sdk.sh
 
-      - name: Apply patches
-        working-directory: ./buildscripts
-        run: ./patch.sh
+      # Toolchain and Android targets come from the crate's rust-toolchain.toml
+      - name: Install Rust
+        working-directory: libmpv/src/main/rust
+        run: |
+          rustup toolchain install
+          rustc -Vv
+          cargo -V
 
-      - name: Build
-        working-directory: ./buildscripts
-        run: ./build.sh
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-lib-*
+          path: ${{ runner.temp }}/native
+
+      - name: Put the native libraries into the prefixes
+        run: |
+          count=0
+          for d in "$RUNNER_TEMP"/native/native-lib-*; do
+            abi=${d##*/native-lib-}
+            mkdir -p "buildscripts/prefix/$abi/lib"
+            cp "$d"/*.so "buildscripts/prefix/$abi/lib/"
+            count=$((count + 1))
+          done
+          [ "$count" -eq 4 ] || { echo "::error::Expected 4 ABIs, got $count"; exit 1; }
+
+      # player.sh builds libplayer.so and fills libmpv/src/main/jniLibs/<abi>
+      - name: Build the wrapper
+        working-directory: buildscripts
+        run: |
+          for arch in armv7l arm64 x86 x86_64; do
+            ./build.sh -n --arch "$arch" player
+          done
+
+      - name: Bundle the AAR
+        run: ./gradlew :libmpv:bundleReleaseAar --no-configuration-cache -PVERSION_NAME="$VERSION"
 
       - name: Check AAR
         run: ./buildscripts/check-aar.sh
 
-      # Uploaded before the emulator test so a flaky emulator doesn't lose it.
+      - name: Write the SBOM and tool versions
+        run: |
+          mkdir -p "$RUNNER_TEMP/info"
+          sbom="$RUNNER_TEMP/info/libmpv-$VERSION.cdx.json"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) ./buildscripts/sbom.sh "$VERSION" > "$sbom"
+          python3 - "$sbom" <<'EOF'
+          import json, sys
+          bom = json.load(open(sys.argv[1]))
+          assert bom["bomFormat"] == "CycloneDX", "not a CycloneDX document"
+          problems = []
+          for c in bom["components"]:
+              if not c.get("version"):
+                  problems.append(f"{c['name']}: no version")
+              if not c.get("externalReferences"):
+                  problems.append(f"{c['name']}: no source reference")
+              if not c["bom-ref"].startswith("crate:") and not c.get("licenses"):
+                  problems.append(f"{c['name']}: no licence")
+          if problems:
+              sys.exit("SBOM problems:\n  " + "\n  ".join(problems))
+          print(f"SBOM: {len(bom['components'])} components")
+          EOF
+          {
+            echo "| runner image (wrapper, AAR) | $ImageOS $ImageVersion |"
+            echo "| Rust | $(cd libmpv/src/main/rust && rustc -V | cut -d' ' -f2-) |"
+            echo "| JDK | $(java -version 2>&1 | head -n1) |"
+            echo "| Gradle | $(./gradlew --version | sed -n 's/^Gradle //p') |"
+          } > "$RUNNER_TEMP/info/tools-assemble.txt"
+          cat "$RUNNER_TEMP/info/tools-assemble.txt"
+
       - uses: actions/upload-artifact@v7
         with:
           name: libmpv-release.aar
           path: ./libmpv/build/outputs/aar/libmpv-release.aar
+          if-no-files-found: error
 
-      # publish.yaml signs the AAR in one Gradle run and uploads it in the
-      # next, so the release asset is only the uploaded file if a second run
-      # reuses the first one's AAR. Check that here, before a tag relies on it.
+      # What the AAR was bundled from: the tests and publish.yaml bundle from these files
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jniLibs
+          path: ./libmpv/src/main/jniLibs/
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-info
+          path: ${{ runner.temp }}/info/
+          if-no-files-found: error
+
+  test:
+    name: Instrumented tests
+    needs: assemble
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-disabled: ${{ inputs.release || false }}
+
+      - name: Install SDK
+        working-directory: buildscripts
+        env:
+          IN_CI: 1
+          SDK_WITHOUT_NDK: 1
+        run: ./include/download-sdk.sh
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: jniLibs
+          path: ./libmpv/src/main/jniLibs
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: libmpv-release.aar
+          path: ${{ runner.temp }}/built
+
+      # publish.yaml does exactly this before it signs: bundle the AAR again in a fresh job
+      # from the uploaded jniLibs, and refuse to release unless the bytes are those of the
+      # AAR that was checked and tested. Run it on every build, so a tag cannot be the
+      # first to find out. (Same mode normalisation as publish.yaml.)
       - name: Check the AAR is reproducible
         run: |
-          aar=libmpv/build/outputs/aar/libmpv-release.aar
-          ./gradlew bundleReleaseAar --no-configuration-cache -PVERSION_NAME=0.0.0-ci
-          first=$(sha256sum "$aar" | cut -d' ' -f1)
-          ./gradlew bundleReleaseAar --no-configuration-cache -PVERSION_NAME=0.0.0-ci
-          second=$(sha256sum "$aar" | cut -d' ' -f1)
-          if [ "$first" != "$second" ]; then
-            echo "::error::Two Gradle runs built different AARs ($first, $second); publish.yaml would attach one and upload the other"
+          find libmpv/src/main/jniLibs -type f -exec chmod 0644 {} +
+          ./gradlew :libmpv:bundleReleaseAar --no-configuration-cache -PVERSION_NAME="$VERSION"
+          built=$(sha256sum "$RUNNER_TEMP/built/libmpv-release.aar" | cut -d' ' -f1)
+          actual=$(sha256sum libmpv/build/outputs/aar/libmpv-release.aar | cut -d' ' -f1)
+          if [ "$actual" != "$built" ]; then
+            echo "::error::Bundling the same jniLibs in a fresh job gave a different AAR ($actual, assemble's is $built); publish.yaml would refuse to release it"
             exit 1
           fi
+          echo "AAR sha256: $actual"
 
-      # Smoke test: load libmpv on an x86_64 emulator. jniLibs is already
-      # filled by the build step.
+      # The emulator is x86_64; the other ABIs would only make the test APK bigger
+      - name: Keep the x86_64 libraries
+        run: |
+          find libmpv/src/main/jniLibs -mindepth 1 -maxdepth 1 ! -name x86_64 -exec rm -rf {} +
+          ls -l libmpv/src/main/jniLibs/x86_64
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -94,7 +343,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Instrumented tests
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
           arch: x86_64
@@ -113,3 +362,98 @@ jobs:
             ./libmpv/build/reports/androidTests/
             ./libmpv/build/outputs/androidTest-results/
           if-no-files-found: warn
+
+  sources:
+    name: Corresponding source
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download dependencies
+        working-directory: buildscripts
+        run: ./include/download-deps.sh
+
+      - name: Apply patches
+        working-directory: buildscripts
+        run: ./patch.sh
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-info-*
+          path: ${{ runner.temp }}/native-info
+
+      # The ABI jobs download on their own (or restore a cache). The tarball is only the
+      # corresponding source if it holds exactly what each of them built from.
+      - name: Check the sources match every ABI build
+        working-directory: buildscripts
+        run: |
+          ./include/hash-sources.sh > "$RUNNER_TEMP/sources.sha256"
+          cat "$RUNNER_TEMP/sources.sha256"
+          count=0 failed=0
+          for f in "$RUNNER_TEMP"/native-info/native-info-*/sources.sha256; do
+            count=$((count + 1))
+            abi=$(basename "$(dirname "$f")"); abi=${abi#native-info-}
+            if ! diff -u "$f" "$RUNNER_TEMP/sources.sha256"; then
+              echo "::error::$abi was built from other sources than this job downloaded. If its native build came from the cache, an upstream tag probably moved: bump NATIVE_CACHE_EPOCH in build.yaml."
+              failed=1
+            fi
+          done
+          [ "$count" -eq 4 ] || { echo "::error::Expected source hashes for 4 ABIs, got $count"; exit 1; }
+          exit $failed
+
+      - name: Install Rust
+        working-directory: libmpv/src/main/rust
+        run: rustup toolchain install
+
+      # Cargo.lock (--locked) pins every crate and its checksum, so the vendored crates
+      # are the ones the wrapper was built with. The appended config makes cargo use them.
+      - name: Vendor the Rust crates
+        working-directory: libmpv/src/main/rust
+        run: |
+          cargo vendor --locked --versioned-dirs vendor > "$RUNNER_TEMP/vendor.toml"
+          mkdir -p .cargo
+          if [ -f .cargo/config.toml ] && grep -q '^\[source' .cargo/config.toml; then
+            echo "::error::.cargo/config.toml already has a [source] table; merge cargo vendor's config by hand"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/vendor.toml" >> .cargo/config.toml
+          cargo metadata --offline --locked --format-version 1 > /dev/null
+          echo "Vendored $(find vendor -mindepth 1 -maxdepth 1 -type d | wc -l) crates"
+
+      # Packed in every build so this step cannot rot; only a release uploads it, and
+      # only a release pays for full compression.
+      - name: Pack corresponding source
+        run: |
+          name="libmpv-$VERSION-sources"
+          level=0
+          [ "$RELEASE" = true ] && level=6
+          tar --exclude=.git --exclude=./buildscripts/sdk --exclude=./libmpv/src/main/rust/target \
+              --transform "s,^\.,$name," -cf - . | xz -T0 -"$level" > "$RUNNER_TEMP/$name.tar.xz"
+          ls -lh "$RUNNER_TEMP/$name.tar.xz"
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ inputs.release }}
+        with:
+          name: sources
+          path: ${{ runner.temp }}/libmpv-${{ env.VERSION }}-sources.tar.xz
+          if-no-files-found: error
+          compression-level: 0
+
+  # The branch ruleset on main requires a check named exactly "Build". It must be red
+  # unless every job above succeeded: a skipped or cancelled job counts as a failure
+  # (a skipped required check would otherwise count as passed). always() makes this
+  # job run, and report, in every one of those cases.
+  build:
+    name: Build
+    needs: [native, assemble, test, sources]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check every job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'length == 4 and all(.[]; .result == "success")' > /dev/null
