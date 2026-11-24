@@ -7,7 +7,11 @@ name: Pages
 # The page's version numbers and component table come from site/data.js, which is not committed:
 # buildscripts/site-data.sh writes it here, from depinfo.sh and sbom.sh on main and from depinfo.sh
 # at the tag of the latest version on Maven Central. The daily run brings a new release to the page
-# without a push. If Maven Central cannot be reached, the job fails and the deployed page stays.
+# without a push: it compares what it generated with what is deployed and deploys only when they
+# differ. data.js holds nothing that changes from run to run (no timestamp); it names main's commit,
+# which the page shows, so a new commit on main is deployed by the next daily run. A push or a run
+# by hand always deploys. If Maven Central cannot be reached, the job fails and the deployed page
+# stays.
 
 on:
   workflow_dispatch:
@@ -34,15 +38,16 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  SITE_URL: https://midasvo.nl/libmpv-android/
+
 jobs:
-  deploy:
-    name: Deploy site
+  build:
+    name: Generate site
     if: github.repository == 'midasvo/libmpv-android' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -59,14 +64,75 @@ jobs:
           ./buildscripts/site-data.sh > "$site/data.js"
           cat "$site/data.js"
 
+      # Only the daily run may skip the deployment. Every file is compared byte for byte with
+      # the deployed one (a query string keeps the CDN from answering with an old copy). A file
+      # that cannot be fetched counts as changed.
+      - name: Compare with the deployed site
+        id: compare
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != schedule ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Deploying: $EVENT run" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          site="$RUNNER_TEMP/site"
+          live="$RUNNER_TEMP/live"
+          changed=false reason=
+          while IFS= read -r f; do
+            rel=${f#"$site"/}
+            rm -f "$live"
+            if ! curl -fsSL --retry 3 --max-time 30 -o "$live" "$SITE_URL$rel?run=$GITHUB_RUN_ID"; then
+              changed=true reason="$rel could not be fetched from $SITE_URL"
+              break
+            fi
+            if ! cmp -s "$f" "$live"; then
+              changed=true reason="$rel differs from the deployed one"
+              break
+            fi
+          done < <(find "$site" -type f | sort)
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = true ]; then
+            echo "Deploying: $reason" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$rel" = data.js ] && [ -f "$live" ]; then diff "$live" "$site/data.js" || true; fi
+          else
+            echo "Not deploying: every file is the same as on $SITE_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Configure Pages
+        if: steps.compare.outputs.changed == 'true'
         uses: actions/configure-pages@v6
 
       - name: Upload site
+        if: steps.compare.outputs.changed == 'true'
         uses: actions/upload-pages-artifact@v5
         with:
           path: ${{ runner.temp }}/site
 
+  deploy:
+    name: Deploy site
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-26.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || steps.retry.outputs.page_url }}
+    steps:
+      # Once a deployment failed with "No artifacts named github-pages were found" although
+      # the upload had succeeded, and a re-run deployed it: so one retry, after a pause.
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+
+      - name: Wait before retrying
+        if: steps.deployment.outcome == 'failure'
+        run: |
+          echo "::warning::The deployment failed; retrying once in 30 s"
+          sleep 30
+
+      - name: Deploy to GitHub Pages (retry)
+        id: retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5

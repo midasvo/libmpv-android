@@ -1,0 +1,8 @@
+# shellcheck settings for the per-component build scripts (see ../.shellcheckrc).
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+external-sources=true
+# SC2154 (referenced but not assigned): these scripts run under build.sh, which exports
+# prefix_dir, native_dir, ndk_triple, ndk_suffix, CC, CXX and the rest (loadarch), and
+# include/path.sh sets cores and toolchain. They are never run on their own.
+disable=SC2154

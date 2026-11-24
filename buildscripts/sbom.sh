@@ -2,13 +2,18 @@
 # Writes a CycloneDX 1.6 SBOM (JSON) of the native components bundled in the AAR to
 # stdout: every library from include/depinfo.sh with version, licence and source, the
 # NDK's libc++, the JNI wrapper (licence from its Cargo.toml) and the Rust crates in its
-# Cargo.lock (which also lists build-only crates such as proc macros).
+# Cargo.lock (which also lists build-only crates such as proc macros). With SBOM_POM set,
+# also the JVM dependencies the AAR's POM declares (not bundled in the AAR, but what every
+# app gets with it): versions from that POM, licences from the table below.
 #
 # Versions come from depinfo.sh. Licences and source locations are kept in the table
 # below: when you add a dependency to depinfo.sh, add it here too (the script fails on a
 # v_* entry it does not know, so a new dependency cannot be left out silently).
 #
-# Usage: sbom.sh <aar-version> > libmpv-<version>.cdx.json
+# Usage: [SBOM_POM=<pom>] sbom.sh <aar-version> > libmpv-<version>.cdx.json
+#   SBOM_POM: the POM Gradle generates for the publication, the file Maven Central gets
+#   (./gradlew :libmpv:generatePomFileForMavenPublication -PVERSION_NAME=<version> writes
+#   libmpv/build/publications/maven/pom-default.xml). CI always passes it.
 # The timestamp is SOURCE_DATE_EPOCH when set, so a given commit gives the same file.
 set -euo pipefail
 
@@ -36,6 +41,12 @@ harfbuzz|v_harfbuzz|MIT-Modern-Variant|git|https://github.com/harfbuzz/harfbuzz.
 libunibreak|v_libunibreak|Zlib|tarball|https://github.com/adah1972/libunibreak/releases/download/libunibreak_@V@/libunibreak-@D@.tar.gz
 dav1d|v_dav1d|BSD-2-Clause|git|https://code.videolan.org/videolan/dav1d.git#@V@
 libxml2|v_libxml2|MIT|git|https://gitlab.gnome.org/GNOME/libxml2.git#v@V@
+'
+# JVM dependencies the POM may declare: groupId:artifactId | licence | source. An unknown
+# one fails, so that a new dependency gets its licence checked here.
+jvm_components='
+org.jetbrains.kotlinx:kotlinx-coroutines-core|Apache-2.0|https://github.com/Kotlin/kotlinx.coroutines
+org.jetbrains.kotlin:kotlin-stdlib|Apache-2.0|https://github.com/JetBrains/kotlin
 '
 # depinfo.sh entries that are build tools, not bundled code
 not_bundled=" v_platform v_sdk v_ndk v_sdk_build_tools v_meson v_gas_preprocessor "
@@ -128,6 +139,39 @@ if [ -f "$lock" ]; then
 		END { flush() }' "$lock")
 else
 	echo "sbom.sh: warning: $lock not found, Rust crates not listed" >&2
+fi
+
+# JVM dependencies from the generated POM: compile and runtime scope (what apps get)
+if [ -n "${SBOM_POM:-}" ]; then
+	[ -f "$SBOM_POM" ] || { echo "sbom.sh: SBOM_POM=$SBOM_POM not found" >&2; exit 1; }
+	jvm_count=0
+	while IFS='|' read -r group artifact jversion scope; do
+		case "$scope" in compile|runtime|"") ;; *) continue ;; esac
+		case "$jversion" in
+			""|*'$'*|*'['*|*'('*) echo "sbom.sh: $group:$artifact has no fixed version in $SBOM_POM ('$jversion')" >&2; exit 1 ;;
+		esac
+		row=$(printf '%s\n' "$jvm_components" | awk -F'|' -v k="$group:$artifact" '$1 == k { print; exit }')
+		[ -n "$row" ] || { echo "sbom.sh: $group:$artifact (in $SBOM_POM) is not in the jvm_components table" >&2; exit 1; }
+		IFS='|' read -r _ jlicence jsource <<< "$row"
+		entries+=("$(printf '{"type":"library","bom-ref":"maven:%s:%s@%s","group":"%s","name":"%s","version":"%s","scope":"required","description":"Maven dependency of the AAR (declared in its POM, not bundled)","licenses":[%s],"purl":"pkg:maven/%s/%s@%s","externalReferences":[{"type":"distribution","url":"https://repo1.maven.org/maven2/%s/%s/%s/"},{"type":"vcs","url":"%s"}]}' \
+			"$group" "$artifact" "$jversion" "$group" "$artifact" "$jversion" "$(json_licence "$jlicence")" \
+			"$group" "$artifact" "$jversion" "${group//.//}" "$artifact" "$jversion" "$jsource")")
+		jvm_count=$((jvm_count + 1))
+	done < <(awk '
+		function tag(t,    v) { v = $0; if (v !~ "<" t ">") return ""; sub(".*<" t ">", "", v); sub("</" t ">.*", "", v); return v }
+		/<dependencies>/ { deps = 1 }
+		/<\/dependencies>/ { deps = 0 }
+		deps && /<dependency>/ { g = a = v = s = ""; inside = 1; next }
+		deps && /<\/dependency>/ { if (inside) print g "|" a "|" v "|" s; inside = 0; next }
+		deps && inside && /<exclusions>/ { excl = 1 }
+		deps && inside && /<\/exclusions>/ { excl = 0; next }
+		deps && inside && !excl {
+			if ((x = tag("groupId")) != "") g = x
+			if ((x = tag("artifactId")) != "") a = x
+			if ((x = tag("version")) != "") v = x
+			if ((x = tag("scope")) != "") s = x
+		}' "$SBOM_POM")
+	[ "$jvm_count" -gt 0 ] || echo "sbom.sh: warning: no compile or runtime dependencies in $SBOM_POM" >&2
 fi
 
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then

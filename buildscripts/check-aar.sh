@@ -1,10 +1,11 @@
 #!/bin/bash
 # Sanity-checks a built AAR: every ABI has the expected native libraries (non-empty
 # regular files, not dangling symlinks), every DT_NEEDED entry of every .so is either
-# bundled in the same ABI directory or an allowed Android system library, and the
-# 64-bit ABIs are 16 KiB page aligned.
+# bundled in the same ABI directory or an allowed Android system library, the 64-bit
+# ABIs are 16 KiB page aligned, and libplayer.so is not larger than its limit below.
 #
 # Usage: check-aar.sh [path-to-aar]
+# In GitHub Actions ($GITHUB_STEP_SUMMARY set) it also writes the sizes to the job summary.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,6 +21,18 @@ min_align=16384
 # dependency fails the check so that someone confirms it exists on every supported device.
 system_libs=(libc.so libm.so libdl.so libz.so liblog.so libandroid.so libmediandk.so
 	libEGL.so libOpenSLES.so)
+# The most the stripped libplayer.so (the Rust wrapper) may weigh per ABI, in KiB. A build
+# above it fails, so that growth (a new crate; a toolchain, profile or debug info change) is
+# a deliberate change of one line here, in review. Sizes on 2026-11-24 (Rust 1.100.0):
+# armeabi-v7a 313, arm64-v8a 420, x86 463, x86_64 449 KiB; the limits leave about 20%.
+libplayer_max_kib () {
+	case "$1" in
+		armeabi-v7a) echo 384 ;;
+		arm64-v8a) echo 512 ;;
+		x86) echo 560 ;;
+		x86_64) echo 544 ;;
+	esac
+}
 
 if [ ! -f "$aar" ]; then
 	echo "Error: AAR not found: $aar" >&2
@@ -44,6 +57,7 @@ unzip -q "$aar" -d "$tmp"
 
 problems=()
 summary=()
+size_rows=()
 
 for abi in "${abis[@]}"; do
 	dir=$tmp/jni/$abi
@@ -67,7 +81,30 @@ for abi in "${abis[@]}"; do
 		done < <(find "$dir" -type f -name '*.so')
 	fi
 	summary+=("$abi: $count .so files, $((size / 1024)) KiB")
+
+	player=$dir/libplayer.so
+	if [ -f "$player" ] && [ ! -L "$player" ]; then
+		player_kib=$(( ($(wc -c < "$player") + 1023) / 1024 ))
+		max_kib=$(libplayer_max_kib "$abi")
+		[ -n "$max_kib" ] || { echo "Error: no libplayer.so limit for $abi in check-aar.sh" >&2; exit 2; }
+		size_rows+=("| $abi | $player_kib KiB | $max_kib KiB | $count | $((size / 1024)) KiB |")
+		summary+=("$abi: libplayer.so $player_kib KiB (limit $max_kib KiB)")
+		if [ "$player_kib" -gt "$max_kib" ]; then
+			problems+=("$abi: libplayer.so is $player_kib KiB, above its limit of $max_kib KiB (libplayer_max_kib in buildscripts/check-aar.sh: raise it there if the growth is intended)")
+		fi
+	fi
 done
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ ${#size_rows[@]} -gt 0 ]; then
+	{
+		echo "### Native libraries in the AAR"
+		echo
+		echo "| ABI | libplayer.so | limit | .so files | all .so files |"
+		echo "|---|---|---|---|---|"
+		printf '%s\n' "${size_rows[@]}"
+		echo
+	} >> "$GITHUB_STEP_SUMMARY"
+fi
 
 for abi in "${abis[@]}"; do
 	dir=$tmp/jni/$abi
