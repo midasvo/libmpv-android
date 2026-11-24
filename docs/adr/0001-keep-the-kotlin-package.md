@@ -59,3 +59,17 @@ releases.
 - the wrapper grows an API of its own that diverges from upstream's.
 
 Then the merge cost is gone. Rename in a major release, and say so in the release notes.
+
+## Update 2026-11-24
+
+The wrapper is now Rust ([ADR 0003](0003-rust-jni-wrapper.md)), and `libmpv/src/main/cpp` is gone.
+Two things above are no longer true: the 37 places in C++ no longer exist (the Rust exports in
+`player/src/exports.rs` name `Java_dev_jdtech_mpv_MPVLib_*` instead), and upstream wrapper changes no
+longer merge without conflicts: they are ported by hand whatever the package is called. The
+merge-cost argument for keeping the package is therefore gone for the native side, and the fork no
+longer aims to keep its diff to upstream small (RELEASING.md).
+
+The decision stands for now on the remaining reason: apps switch from `dev.jdtech.mpv:libmpv` by
+changing only the coordinate, and a rename breaks every user's imports. The second "Revisit when"
+condition is close (the wrapper has its own implementation, and API of its own is being added), so
+decide again before the next major release.

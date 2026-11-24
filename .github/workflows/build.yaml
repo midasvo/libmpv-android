@@ -199,6 +199,16 @@ jobs:
           rustc -Vv
           cargo -V
 
+      # On the host: formatting, lints, and the unit tests of everything that needs
+      # neither JNI nor mpv (string conversion, handle table, lifecycle gate, events).
+      - name: Check and test the wrapper
+        working-directory: libmpv/src/main/rust
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --target x86_64-linux-android --all-targets -- -D warnings
+          cargo test --locked
+
       - uses: actions/download-artifact@v8
         with:
           pattern: native-lib-*
@@ -257,6 +267,11 @@ jobs:
             echo "| Gradle | $(./gradlew --version | sed -n 's/^Gradle //p') |"
           } > "$RUNNER_TEMP/info/tools-assemble.txt"
           cat "$RUNNER_TEMP/info/tools-assemble.txt"
+
+      # The README's licence table must say what the SBOM says (versions are not compared,
+      # so a dependency bump cannot fail this)
+      - name: Check the README licences against the SBOM
+        run: ./buildscripts/check-docs.sh
 
       - uses: actions/upload-artifact@v7
         with:

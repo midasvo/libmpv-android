@@ -1,0 +1,133 @@
+#!/bin/bash
+# Writes the data of the landing page (site/data.js) to stdout: every bundled component
+# with its licence, its version in this checkout (main) and its version in the latest
+# release. pages.yaml runs it at deploy time, so the site repeats no version by hand.
+#
+#   site-data.sh [<release-version>] > site/data.js
+#   site-data.sh --list    # tab-separated: name, version, licence, kind (used by check-docs.sh)
+#
+# Names, versions and licences come from sbom.sh, which reads include/depinfo.sh. The
+# release column is include/depinfo.sh (and patches/) at the tag v<release-version>.
+# Without a version, the release is the latest version on Maven Central, which is what
+# an app can depend on. Needs git with the release tag (a full clone, or `git fetch
+# --tags`), and curl when no version is given.
+#
+# site/data.js is not committed (site/.gitignore): without it the page shows links
+# instead of versions.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$here/.." && pwd)
+metadata=https://repo1.maven.org/maven2/io/github/midasvo/libmpv/maven-metadata.xml
+
+die () { echo "site-data.sh: $*" >&2; exit 1; }
+
+# One line per component of the SBOM that has a licence (the Rust crates have none):
+# bom-ref, name, version, licence, kind. kind is "dependency" for an entry of depinfo.sh
+# (v_<bom-ref> is set there), "other" for the wrapper and libc++. Relies on sbom.sh
+# printing each component as one line that starts with type, bom-ref, name and version.
+list_components () {
+	local sbom line ref name version licence kind count=0
+	sbom=$("$here/sbom.sh" 0.0.0-site) || die "sbom.sh failed"
+	local id_re='"licenses":\[\{"license":\{"id":"([^"]*)"\}\}\]'
+	local name_re='"licenses":\[\{"license":\{"name":"([^"]*)"\}\}\]'
+	local expr_re='"licenses":\[\{"expression":"([^"]*)"\}\]'
+	local head_re='^\{"type":"library","bom-ref":"([^"]*)","name":"([^"]*)","version":"([^"]*)"'
+	while IFS= read -r line; do
+		[[ $line =~ $head_re ]] || continue
+		ref=${BASH_REMATCH[1]} name=${BASH_REMATCH[2]} version=${BASH_REMATCH[3]}
+		if [[ $line =~ $id_re ]] || [[ $line =~ $name_re ]] || [[ $line =~ $expr_re ]]; then
+			licence=${BASH_REMATCH[1]}
+		else
+			continue
+		fi
+		kind=other
+		grep -q "^v_$ref=" "$here/include/depinfo.sh" && kind=dependency
+		printf '%s\t%s\t%s\t%s\t%s\n' "$ref" "$name" "$version" "$licence" "$kind"
+		count=$((count + 1))
+	done <<< "$sbom"
+	[ "$count" -gt 0 ] || die "found no components with a licence in sbom.sh's output (did its format change?)"
+}
+
+json_string () {
+	local s=${1//\\/\\\\}
+	s=${s//\"/\\\"}
+	printf '"%s"' "$s"
+}
+
+if [ "${1:-}" = --list ]; then
+	list_components | cut -f2-
+	exit 0
+fi
+
+release=${1:-}
+if [ -z "$release" ]; then
+	hash curl 2>/dev/null || die "curl is needed to look up the latest release (or pass the version)"
+	release=$(curl -fsS --retry 3 --retry-delay 5 --max-time 30 "$metadata" |
+		sed -n 's:.*<release>\(.*\)</release>.*:\1:p') || die "could not read $metadata"
+	[ -n "$release" ] || die "no <release> in $metadata"
+fi
+[[ $release =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+	die "'$release' is not a version like 1.3.0"
+tag=v$release
+
+git -C "$repo_root" rev-parse -q --verify "refs/tags/$tag^{commit}" > /dev/null ||
+	die "tag $tag is not in this clone (git fetch --tags)"
+release_depinfo=$(git -C "$repo_root" show "$tag:buildscripts/include/depinfo.sh") ||
+	die "no buildscripts/include/depinfo.sh at $tag"
+commit=$(git -C "$repo_root" rev-parse HEAD)
+
+# v_<name> at the release tag, with _ and - turned into dots as sbom.sh does
+release_version () {
+	local v
+	v=$(sed -n "s/^v_$1=\(.*\)\$/\1/p" <<< "$release_depinfo" | head -n 1)
+	v=${v//_/.}
+	printf '%s' "${v//-/.}"
+}
+
+# patch files for a component, in this checkout or at the release tag
+patches_json () {
+	local where=$1 name=$2 out= p
+	if [ "$where" = main ]; then
+		for p in "$here/patches/$name"/*; do
+			[ -e "$p" ] && out+="${out:+,}$(json_string "$(basename "$p")")"
+		done
+	else
+		while IFS= read -r p; do
+			[ -n "$p" ] && out+="${out:+,}$(json_string "${p##*/}")"
+		done < <(git -C "$repo_root" ls-tree --name-only "$tag" "buildscripts/patches/$name/" 2>/dev/null)
+	fi
+	printf '[%s]' "$out"
+}
+
+components=$(list_components)
+deps= others=
+while IFS=$'\t' read -r ref name version licence kind; do
+	if [ "$kind" = dependency ]; then
+		entry=$(printf '{"name":%s,"licence":%s,"main":%s,"release":%s,"mainPatches":%s,"releasePatches":%s}' \
+			"$(json_string "$name")" "$(json_string "$licence")" "$(json_string "$version")" \
+			"$(json_string "$(release_version "$ref")")" \
+			"$(patches_json main "$ref")" "$(patches_json release "$ref")")
+		deps+="${deps:+,$'\n    '}$entry"
+	else
+		entry=$(printf '{"name":%s,"licence":%s}' "$(json_string "$name")" "$(json_string "$licence")")
+		others+="${others:+,$'\n    '}$entry"
+	fi
+done <<< "$components"
+
+. "$here/include/depinfo.sh"
+
+cat <<EOF
+// Generated by buildscripts/site-data.sh at ${commit:0:12}. Do not edit; not committed.
+window.SITE_DATA = {
+  "commit": $(json_string "$commit"),
+  "release": $(json_string "$release"),
+  "ndk": {"main": $(json_string "$v_ndk"), "release": $(json_string "$(sed -n 's/^v_ndk=\(.*\)$/\1/p' <<< "$release_depinfo")")},
+  "components": [
+    $deps
+  ],
+  "others": [
+    $others
+  ]
+};
+EOF

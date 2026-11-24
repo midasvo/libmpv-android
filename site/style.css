@@ -66,6 +66,11 @@
 
 /* ---------- base ---------- */
 
+/* the generated parts (site.js) toggle hidden on elements that set their own display */
+[hidden] {
+  display: none !important;
+}
+
 *,
 *::before,
 *::after {
@@ -551,6 +556,34 @@ td.v {
 
 .table-scroll {
   overflow-x: auto;
+}
+
+.table-scroll .meta {
+  margin-top: 1rem;
+}
+
+/* a version on main that is not in the latest release yet */
+td.v.changed {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.patched,
+.patched-key {
+  font: 500 0.75rem/1 var(--body);
+  color: var(--accent-2);
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  td.v .patched {
+    display: block;
+    margin-top: 0.25em;
+  }
+}
+
+.card.verify {
+  margin-top: 1.25rem;
 }
 
 /* ---------- footer ---------- */
