@@ -1,0 +1,15 @@
+# The commit each git tag in include/download-deps.sh resolved to when it was recorded:
+# <name> <tag> <commit>. download-deps.sh fails when a recorded tag now clones as another
+# commit (it was moved upstream) and warns when the current tag has no record (a version
+# bump). Written by ./update-checksums.sh (git ls-remote; for an annotated tag, its commit).
+mbedtls v3.6.8 82e69999f91126589a28b70dd75b69fbcabe2711
+dav1d 1.5.5 6c7bee685677fd997a431302be4fea8ea4017606
+ffmpeg n9.1 74e4393595cf2b5857f0da925c4e0dd74ea306e5
+freetype VER-2-15-0 37515cf56ba3349656049edbed89ffc6f6466f2d
+fribidi v1.0.18 15393e4937aa95bcf865d92143735746aeb654fa
+harfbuzz 15.2.0 ed51d202cfd0c29372d3ee056eb0dc715688a410
+libxml2 v2.15.4 96498992efa48d52b0e8b83058bd88dbdaf153c1
+fontconfig 2.18.4 fbe1d59967aabb7b05e785c7a86704a1ece8fa6f
+libass 0.17.5 4a05d8127f525943ebf45fdc6497c9e665947f0d
+libplacebo v7.387.0 275f7dea27924cdd34ab2e6c20e448b6bc4fab65
+mpv v0.42.0 b0841e8c4d156b8403dc1876c4cbd9011eb583f3

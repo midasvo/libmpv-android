@@ -1,0 +1,80 @@
+name: Build or playback problem
+description: The AAR crashes, does not play something, or does not build.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The fields below are what is needed to act on it; without the
+        mpv log most playback reports cannot be looked into. If the problem is in mpv or FFmpeg
+        itself, it is fixed there (see the last question).
+  - type: input
+    id: version
+    attributes:
+      label: Library version
+      description: The version of io.github.midasvo:libmpv, or the commit if you built it yourself.
+      placeholder: "1.3.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What goes wrong
+      options:
+        - Playback (a file or stream does not play, or plays wrong)
+        - A crash or an exception from MPVLib
+        - Building from source
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Maker and model, or the emulator image.
+      placeholder: "Pixel 7, or emulator API 34 x86_64"
+  - type: input
+    id: android
+    attributes:
+      label: Android version
+      placeholder: "Android 14 (API 34)"
+  - type: dropdown
+    id: abi
+    attributes:
+      label: ABI
+      description: "`adb shell getprop ro.product.cpu.abi` prints it."
+      options:
+        - arm64-v8a
+        - armeabi-v7a
+        - x86_64
+        - x86
+        - Not relevant (a build problem)
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: For playback, say what kind of file or stream (container, codecs, subtitles) and which mpv options your app sets. A link to a sample file helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description: The MPVLib calls or the app steps. For a build problem, the commands you ran and on which host.
+  - type: textarea
+    id: log
+    attributes:
+      label: mpv log
+      description: "`adb logcat -s mpv` while the problem happens (libplayer writes mpv's log under the tag `mpv`). For a crash, also the stack trace. For a build problem, the end of the build output."
+      render: shell
+  - type: dropdown
+    id: upstream
+    attributes:
+      label: Does upstream's dev.jdtech.mpv:libmpv show the same?
+      description: This fork differs from jarnedemeulemeester/libmpv-android in its wrapper and build. If upstream's AAR does the same, the cause is probably in mpv or FFmpeg.
+      options:
+        - Not tried
+        - "Yes, the same with upstream's AAR"
+        - "No, upstream's AAR works"
+    validations:
+      required: true

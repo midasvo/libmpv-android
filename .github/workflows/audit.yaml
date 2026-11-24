@@ -1,0 +1,78 @@
+name: Rust advisories
+
+# Checks the wrapper's crates (libmpv/src/main/rust/Cargo.lock) against the RustSec advisory
+# database with cargo-audit. Advisories are published over time, not with a change here, so this
+# runs daily on main as well as on every change to the crates' manifests; it is not part of
+# build.yaml (and not the required Build check), so a new advisory against a released version
+# turns this workflow red instead of blocking unrelated pull requests.
+#
+# Fails on a vulnerability, an unsound crate or a yanked version; an unmaintained crate is
+# reported as a warning. cargo-audit is a pinned prebuilt release, checked against its SHA-256,
+# so nothing is compiled.
+
+on:
+  schedule:
+    - cron: "17 5 * * *" # daily, 05:17 UTC
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "libmpv/src/main/rust/Cargo.lock"
+      - "libmpv/src/main/rust/**/Cargo.toml"
+      - ".github/workflows/audit.yaml"
+  pull_request:
+    paths:
+      - "libmpv/src/main/rust/Cargo.lock"
+      - "libmpv/src/main/rust/**/Cargo.toml"
+      - ".github/workflows/audit.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-26.04
+    env:
+      # https://github.com/rustsec/rustsec/releases (tag cargo-audit/v<version>): the SHA-256
+      # of cargo-audit-x86_64-unknown-linux-musl-v<version>.tgz, as the release lists it
+      CARGO_AUDIT_VERSION: 0.23.0
+      CARGO_AUDIT_SHA256: 4f01c74ed84b2dffd0b1d37012a62cdf2a92c96e25bdf8eec7fcc0d4d3eb7811
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install cargo-audit
+        run: |
+          name="cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${CARGO_AUDIT_VERSION}/$name.tgz"
+          echo "$CARGO_AUDIT_SHA256  $RUNNER_TEMP/$name.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/cargo-audit"
+          tar -xzf "$RUNNER_TEMP/$name.tgz" -C "$RUNNER_TEMP/cargo-audit"
+          bin=$(find "$RUNNER_TEMP/cargo-audit" -type f -name cargo-audit | head -n 1)
+          [ -x "$bin" ] || { echo "::error::No cargo-audit binary in $name.tgz"; exit 1; }
+          echo "CARGO_AUDIT=$bin" >> "$GITHUB_ENV"
+          "$bin" audit --version
+
+      # Run directly (not as `cargo audit`), so the crate's rust-toolchain.toml does not
+      # make rustup install the toolchain: cargo-audit only reads Cargo.lock.
+      - name: Audit Cargo.lock
+        run: |
+          set -o pipefail
+          status=0
+          "$CARGO_AUDIT" audit --file libmpv/src/main/rust/Cargo.lock \
+            --deny unsound --deny yanked 2>&1 | tee "$RUNNER_TEMP/audit.txt" || status=$?
+          {
+            echo "### cargo audit ($([ "$status" -eq 0 ] && echo passed || echo "**failed**"))"
+            echo
+            echo '```'
+            grep -vE '^\s*(Fetching|Loaded|Updating|Scanning)' "$RUNNER_TEMP/audit.txt" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

@@ -1,0 +1,8 @@
+# shellcheck settings for the build scripts (CI: build.yaml, Lint job). shellcheck uses the
+# .shellcheckrc nearest to each script: scripts/ has its own, with the same settings plus one.
+#
+# Sourced files: the scripts run from buildscripts/ (or cd there) and source
+# ./include/depinfo.sh and friends relative to it.
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+external-sources=true

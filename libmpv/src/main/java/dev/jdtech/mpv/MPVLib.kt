@@ -8,9 +8,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * One mpv player. Lifecycle: [create], then options with [setOptionString], then
- * [init]; then properties, commands and observers; finally [destroy]. After
- * [destroy] the instance is unusable: methods that reach mpv throw
- * [IllegalStateException], and a second [destroy] does nothing.
+ * [init]; then properties, commands and observers; finally [destroy] (or [close], so
+ * that `MPVLib.create(context)?.use { ... }` works). After [destroy] the instance is
+ * unusable: methods that reach mpv throw [IllegalStateException], and a second
+ * [destroy] does nothing.
  *
  * Observer and log callbacks arrive on mpv's event thread, not the main thread,
  * one at a time. They may call the other methods of this instance, but must not
@@ -21,11 +22,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * More of mpv's client API is available as extension functions: structured values
  * ([getPropertyNode], [commandNode], [MpvNode]), suspend functions on mpv's async API
  * ([commandAsync], [getPropertyAsync], [setPropertyAsync]), property and event flows
- * ([doublePropertyFlow], [nodePropertyFlow], [eventFlow], ...), [unobserveProperty], and
- * custom protocols implemented in Kotlin ([registerStreamProtocol]).
+ * ([doublePropertyFlow], [nodePropertyFlow], [eventFlow], ...), [unobserveProperty],
+ * custom protocols implemented in Kotlin ([registerStreamProtocol]), and [setLogcatLevel].
  */
 @Suppress("unused")
-class MPVLib private constructor(nativePtr: Long) {
+class MPVLib private constructor(nativePtr: Long) : AutoCloseable {
     // Volatile: read by every thread that calls in, written by create and destroy.
     @Volatile
     private var nativeInstance: Long = 0
@@ -101,6 +102,14 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeDestroy(instance: Long)
 
+    /**
+     * The same as [destroy], for [AutoCloseable]: `MPVLib.create(context)?.use { mpv -> ... }`
+     * destroys the instance when the block ends, also when it throws. Like [destroy], a
+     * second call does nothing, and a call from an observer or stream callback of this
+     * instance throws [IllegalStateException].
+     */
+    override fun close() = destroy()
+
     fun attachSurface(surface: Surface) {
         checkCreated()
         nativeAttachSurface(nativeInstance, surface)
@@ -130,7 +139,8 @@ class MPVLib private constructor(nativePtr: Long) {
      * and echoed to logcat ("no", "fatal", "error", "warn", "info", "v",
      * "debug", "trace"). Defaults to "v". Verbose messages include the URLs
      * mpv opens, so apps playing authenticated URLs may want "warn" or "no".
-     * Returns an mpv error code (0 on success).
+     * To keep delivering them to [LogObserver]s but not to logcat, use
+     * [setLogcatLevel]. Returns an mpv error code (0 on success).
      */
     fun requestLogMessages(level: String): Int {
         checkCreated()
@@ -158,6 +168,10 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeGetPropertyLong(instance: Long, property: String): Long?
 
+    /**
+     * Sets an int64 property. An mpv error is logged, not reported: use [setPropertyNode]
+     * (or [setPropertyAsync]) with an [MpvNode.Int64Value] to get it as [MpvException].
+     */
     fun setPropertyInt(property: String, value: Int) {
         checkCreated()
         nativeSetPropertyInt(nativeInstance, property, value)
@@ -170,6 +184,10 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeGetPropertyDouble(instance: Long, property: String): Double?
 
+    /**
+     * Sets a double property. An mpv error is logged, not reported: use [setPropertyNode]
+     * (or [setPropertyAsync]) with an [MpvNode.DoubleValue] to get it as [MpvException].
+     */
     fun setPropertyDouble(property: String, value: Double) {
         checkCreated()
         nativeSetPropertyDouble(nativeInstance, property, value)
@@ -182,6 +200,10 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeGetPropertyBoolean(instance: Long, property: String): Boolean?
 
+    /**
+     * Sets a flag property. An mpv error is logged, not reported: use [setPropertyNode]
+     * (or [setPropertyAsync]) with an [MpvNode.FlagValue] to get it as [MpvException].
+     */
     fun setPropertyBoolean(property: String, value: Boolean) {
         checkCreated()
         nativeSetPropertyBoolean(nativeInstance, property, value)
@@ -194,6 +216,11 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeGetPropertyString(instance: Long, property: String): String?
 
+    /**
+     * Sets a property from a string, which mpv parses as it parses the option. An mpv error
+     * is logged, not reported: use [setPropertyNode] (or [setPropertyAsync]) with an
+     * [MpvNode.StringValue], which mpv parses the same way, to get it as [MpvException].
+     */
     fun setPropertyString(property: String, value: String) {
         checkCreated()
         nativeSetPropertyString(nativeInstance, property, value)
@@ -202,7 +229,9 @@ class MPVLib private constructor(nativePtr: Long) {
 
     /**
      * Delivers changes of [property], in mpv [format] ([MpvFormat]), to the [EventObserver]s
-     * until [unobserveProperty] (mpv_observe_property). An mpv error is logged, not thrown.
+     * until [unobserveProperty] (mpv_observe_property). An mpv error is logged, not thrown;
+     * mpv refuses only an unknown [format] (a property that does not exist is observed, and
+     * reads as unavailable). A property flow ([doublePropertyFlow], ...) throws it instead.
      */
     fun observeProperty(property: String, format: Int) {
         checkCreated()

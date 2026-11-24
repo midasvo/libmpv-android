@@ -3,6 +3,20 @@
   "extends": [
     "config:recommended"
   ],
+  "packageRules": [
+    {
+      "description": "mpv supports Lua 5.1 and 5.2 only (LuaJIT aside): never propose Lua 5.3 or later",
+      "matchDatasources": ["github-tags"],
+      "matchPackageNames": ["lua/lua"],
+      "allowedVersions": "<5.3.0"
+    },
+    {
+      "description": "mbedtls 4 is held back on purpose: stay on the 3.x line until the hold is lifted",
+      "matchDatasources": ["github-releases"],
+      "matchPackageNames": ["Mbed-TLS/mbedtls"],
+      "allowedVersions": "<4.0.0"
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",

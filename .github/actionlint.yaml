@@ -1,0 +1,5 @@
+# actionlint (run by build.yaml's Lint job). GitHub-hosted runner labels that the pinned
+# actionlint does not know yet are listed here, or it reports them as unknown.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

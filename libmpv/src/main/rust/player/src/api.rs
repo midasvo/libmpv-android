@@ -182,15 +182,21 @@ pub extern "system" fn Java_dev_jdtech_mpv_internal_Native_getPropertyAsync(
     handle: jlong,
     id: jlong,
     name: jstring,
+    format: jint,
 ) {
     entry(env, (), |env| {
         let instance = instance(handle)?;
         let active = instance.enter()?;
         let name = env.c_string(name)?;
+        // the reply's value reaches Kotlin as a node (`Value::as_node`)
+        if !observable(format) || format == MPV_FORMAT_NONE {
+            return Err(Failure::mpv(
+                MPV_ERROR_INVALID_PARAMETER,
+                format!("getPropertyAsync({}) with format {format}", lossy(&name)),
+            ));
+        }
         // SAFETY: an admitted call and a NUL-terminated name
-        let r = unsafe {
-            mpv_get_property_async(active.mpv(), id as u64, name.as_ptr(), MPV_FORMAT_NODE)
-        };
+        let r = unsafe { mpv_get_property_async(active.mpv(), id as u64, name.as_ptr(), format) };
         check(r, || format!("getPropertyAsync({})", lossy(&name)))
     })
 }
@@ -224,8 +230,9 @@ pub extern "system" fn Java_dev_jdtech_mpv_internal_Native_setPropertyAsync(
     })
 }
 
-/// The formats a property can be observed with here; mpv accepts more, but
-/// these are the ones `onPropertyChange` can deliver.
+/// The formats a property can be observed (or read asynchronously) with here;
+/// mpv accepts more, but these are the ones `onPropertyChange` and `onReply`
+/// can deliver.
 fn observable(format: jint) -> bool {
     matches!(
         format,
@@ -311,4 +318,14 @@ pub extern "system" fn Java_dev_jdtech_mpv_internal_Native_addStreamProtocol(
         let protocol = env.c_string(protocol)?;
         instance.add_stream_protocol(env, &protocol, adapter)
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_jdtech_mpv_internal_Native_setLogcatLevel(
+    env: *mut JNIEnv,
+    _cls: jclass,
+    handle: jlong,
+    level: jint,
+) {
+    entry(env, (), |_| instance(handle)?.set_logcat_level(level))
 }

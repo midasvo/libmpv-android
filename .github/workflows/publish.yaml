@@ -8,6 +8,9 @@ name: Publish
 # runs every step with the same commands, except that it signs with a throwaway key,
 # publishes to the runner's local Maven repository, and creates no attestation and no
 # release. It uses no environment and no secret.
+#
+# The dry run also runs every week on main (schedule, version 0.0.0), so that a broken
+# release path shows up as a failed run before a release needs it.
 
 on:
   push:
@@ -19,6 +22,8 @@ on:
         description: Version to rehearse (dry run; must not be on Maven Central yet)
         type: string
         default: 0.0.0
+  schedule:
+    - cron: "0 6 * * 3" # Wednesdays 06:00 UTC: dry run of version 0.0.0 (a schedule has no inputs)
 
 permissions:
   contents: read
@@ -46,11 +51,12 @@ jobs:
       # commit is on main and whose version is not on Maven Central yet (a moved or
       # re-pushed tag must not touch the release or upload again).
       # FETCH_HEAD is used because a tag checkout may have no origin/main ref.
-      # Only a tag push is a real release; everything else is a dry run.
+      # Only a tag push is a real release; everything else is a dry run (a schedule has no
+      # inputs, so it rehearses 0.0.0, which is never on Maven Central).
       - name: Check tag
         id: check
         env:
-          TAG: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version || '0.0.0') }}
           DRY_RUN: ${{ github.event_name == 'push' && github.ref_type == 'tag' && 'false' || 'true' }}
         run: |
           semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
@@ -213,10 +219,23 @@ jobs:
             ${{ runner.temp }}/release/libmpv-${{ env.VERSION }}.aar
             ${{ runner.temp }}/release/libmpv-${{ env.VERSION }}-sources.tar.xz
 
+      # The API section compares libmpv/api/libmpv.api with the previous release: the
+      # highest vX.Y.Z tag on this commit's history other than this one.
       - name: Write release notes
         run: |
           git fetch --quiet https://github.com/jarnedemeulemeester/libmpv-android.git main
           upstream=$(git merge-base HEAD FETCH_HEAD)
+          previous=$(git tag --merged HEAD --list 'v*' --sort=-v:refname |
+            grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | grep -vxF "$TAG" | head -n 1 || true)
+          if [ -n "$previous" ]; then
+            bash buildscripts/api-diff.sh "$previous" > "$RUNNER_TEMP/api.md"
+            # removed lines need a new major version (RELEASING.md, "Cutting a release")
+            if grep -q '(\*\*breaking\*\*' "$RUNNER_TEMP/api.md" && [ "${VERSION%%.*}" = "$(echo "${previous#v}" | cut -d. -f1)" ]; then
+              echo "::warning::The public API lost or changed lines since $previous, but $VERSION has the same major version"
+            fi
+          else
+            echo "**Public API:** no earlier release tag to compare \`libmpv/api/libmpv.api\` with." > "$RUNNER_TEMP/api.md"
+          fi
           {
             echo "\`io.github.midasvo:libmpv:${VERSION}\`"
             echo
@@ -231,6 +250,10 @@ jobs:
             echo "| Tool | Version |"
             echo "|---|---|"
             cat "$RUNNER_TEMP"/native-info/*/tools.txt "$RUNNER_TEMP/info/tools-assemble.txt" | sort -u
+            echo
+            echo "## API"
+            echo
+            cat "$RUNNER_TEMP/api.md"
             echo
             echo "## Licence"
             echo

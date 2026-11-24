@@ -64,7 +64,7 @@ use std::borrow::Cow;
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
@@ -83,6 +83,11 @@ use crate::stream_jni;
 
 pub const ILLEGAL_STATE: &CStr = c"java/lang/IllegalStateException";
 pub const RUNTIME: &CStr = c"java/lang/RuntimeException";
+
+/// The event thread's name, natively and as a `java.lang.Thread`, in traces and ANR
+/// dumps. Linux keeps at most 15 bytes of a thread name; this fits, like
+/// `stream::canceller::THREAD_NAME`.
+pub const EVENT_THREAD_NAME: &CStr = c"mpv-event";
 
 /// Why a JNI call returns to Java with an exception.
 pub enum Failure {
@@ -156,6 +161,9 @@ pub struct Instance {
     protocols: Mutex<Vec<i64>>,
     /// the ids of `MPVLib.observeProperty`'s observations
     observations: Mutex<Observations>,
+    /// the most verbose mpv log level echoed to logcat (`setLogcatLevel`);
+    /// every level by default, as before
+    logcat_level: AtomicI32,
 }
 
 /// A call admitted by the gate: the only way to reach the mpv handle.
@@ -414,6 +422,7 @@ pub fn create(env: &Env, this: jobject, app_context: jobject) -> Result<jlong> {
         surface: Mutex::new(None),
         protocols: Mutex::new(Vec::new()),
         observations: Mutex::new(Observations::default()),
+        logcat_level: AtomicI32::new(event::LOGCAT_ALL),
     });
     match INSTANCES.insert(instance) {
         Ok(handle) => Ok(handle),
@@ -460,7 +469,7 @@ impl Instance {
         let me = Arc::clone(self);
         let started = self.lifecycle.start_worker(move || {
             thread::Builder::new()
-                .name("event_thread".into())
+                .name(EVENT_THREAD_NAME.to_string_lossy().into_owned())
                 .spawn(move || event_loop(me))
                 .map(|handle| {
                     let id = handle.thread().id();
@@ -575,6 +584,15 @@ impl Instance {
             removed = removed.saturating_add(r);
         }
         Ok(removed)
+    }
+
+    /// `Native.setLogcatLevel`: which of mpv's log messages are also written
+    /// to logcat. Does not touch mpv, but is refused after `destroy` like
+    /// every other call.
+    pub fn set_logcat_level(&self, level: c_int) -> Result<()> {
+        let _active = self.enter()?;
+        self.logcat_level.store(level, Ordering::Relaxed);
+        Ok(())
     }
 
     /// `Native.addStreamProtocol`: registers `adapter` (a ProtocolAdapter)
@@ -702,7 +720,8 @@ fn event_name(id: mpv_event_id) -> String {
 }
 
 fn event_loop(instance: Arc<Instance>) {
-    let Some(attached) = instance.vm.attach_current_thread() else {
+    // named, so that the java.lang.Thread is recognisable too (not "Thread-12")
+    let Some(attached) = instance.vm.attach_named(Some(EVENT_THREAD_NAME)) else {
         log::error("failed to acquire java env");
         return;
     };
@@ -724,7 +743,10 @@ fn event_loop(instance: Arc<Instance>) {
         let Some(ev) = (unsafe { ev.as_ref() }) else {
             continue;
         };
-        let delivered = panic::catch_unwind(AssertUnwindSafe(|| deliver(env, methods, this, ev)));
+        let logcat_level = instance.logcat_level.load(Ordering::Relaxed);
+        let delivered = panic::catch_unwind(AssertUnwindSafe(|| {
+            deliver(env, methods, this, ev, logcat_level)
+        }));
         if delivered.is_err() {
             log::error("panic while delivering an mpv event; continuing");
         }
@@ -772,7 +794,13 @@ fn java_value<'e>(
     })
 }
 
-fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result<()> {
+fn deliver(
+    env: &Env,
+    m: &Methods,
+    this: jobject,
+    ev: &mpv_event,
+    logcat_level: c_int,
+) -> jni::Result<()> {
     // SAFETY: `ev` came from mpv_wait_event and is used before the next one
     let Some(event) = (unsafe { event::decode(ev) }) else {
         return Ok(());
@@ -832,10 +860,12 @@ fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result
             text,
             log_level,
         } => {
-            log::write(
-                event::android_priority(log_level),
-                &event::logcat_line(prefix, level, text),
-            );
+            if event::echo_to_logcat(log_level, logcat_level) {
+                log::write(
+                    event::android_priority(log_level),
+                    &event::logcat_line(prefix, level, text),
+                );
+            }
             let prefix = env.new_string(prefix)?;
             let text = env.new_string(text)?;
             call(
@@ -927,27 +957,23 @@ fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result
         // Replies go only to the request (MPVLib's async calls), never to an
         // EventObserver: every reply must reach it, or a coroutine would wait
         // forever, so a failure to build the result is reported as an error.
+        // In the format the request asked for (getPropertyAsync and its typed
+        // variants), passed on as a node like a node-typed reply.
         Event::GetPropertyReply {
             userdata,
             error,
             value,
-        } => match value {
-            Value::Node(n) if error >= 0 => {
-                // SAFETY: a node in the current event
-                match unsafe { node_bytes(env, n.0) } {
-                    Ok(bytes) => reply(userdata, error, Some(&bytes)),
-                    Err(e) => reply(userdata, e, None),
-                }
+        } if error >= 0 => {
+            let node = value.as_node();
+            // SAFETY: a node in, or built from a value of, the current event
+            match unsafe { node_bytes(env, &node) } {
+                Ok(bytes) => reply(userdata, error, Some(&bytes)),
+                Err(e) => reply(userdata, e, None),
             }
-            _ if error >= 0 => match env.new_byte_array(&[0]) {
-                Ok(none) => reply(userdata, error, Some(&none)),
-                Err(_) => {
-                    env.describe_and_clear_exception();
-                    reply(userdata, MPV_ERROR_NOMEM, None);
-                }
-            },
-            _ => reply(userdata, error, None),
-        },
+        }
+        Event::GetPropertyReply {
+            userdata, error, ..
+        } => reply(userdata, error, None),
         Event::SetPropertyReply { userdata, error } => reply(userdata, error, None),
         Event::CommandReply {
             userdata,

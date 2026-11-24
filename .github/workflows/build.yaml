@@ -4,19 +4,29 @@ name: Build libmpv-android
 # run it directly; publish.yaml calls it (workflow_call, release: true) and adds only what
 # a release does on top: signing, the GitHub release and the Maven Central upload.
 #
-#   native (x4, parallel) ──┬── assemble ── test ──┐
-#                           └── sources ───────────┴── Build (the required check)
+#   lint ── native (x4) ──┬── assemble ──┬── test (x3) ───┐
+#                         │              └── reproducible ┤
+#                         └── sources ────────────────────┴── Build (the required check)
 #
+# lint:     shellcheck on the scripts and actionlint on the workflows, before anything
+#           expensive starts (about 20 s on the critical path).
 # native:   libmpv and its dependencies for one ABI (build.sh --arch <a> mpv), cached per
 #           ABI except in release builds. Hands on prefix/<abi>/lib/*.so, the hashes of
 #           the sources it was built from and the tool versions.
 # assemble: builds the Rust wrapper for the four ABIs (player.sh, which also fills
-#           jniLibs), bundles the AAR with Gradle (packaging only), checks it, writes the
-#           SBOM. Hands on the AAR and the jniLibs it was bundled from.
-# test:     bundles the AAR again from those jniLibs and checks the bytes match (what
-#           publish.yaml relies on), then runs the instrumented tests on an x86_64 emulator.
+#           jniLibs), bundles the AAR with Gradle (packaging only), checks it (libraries,
+#           JNI exports, libplayer.so size, public API), runs the host unit tests and
+#           writes the SBOM. Hands on the AAR and the jniLibs it was bundled from.
+# test:     the instrumented tests on three emulators: API 34 and API 26 (minSdk) on
+#           x86_64, and API 29 on x86 (32-bit; 29 is the newest API with a default x86
+#           image). Each loads only its own ABI's libraries.
+# reproducible: bundles the AAR again from those jniLibs and checks the bytes match (what
+#           publish.yaml relies on).
 # sources:  the GPL corresponding source (dependencies as downloaded and patched, Rust
 #           crates vendored), checked to be exactly what every ABI was built from.
+#
+# Every job writes what it checked to its job summary (test counts, the native cache, the
+# AAR's sha256, libplayer.so sizes).
 
 on:
   push:
@@ -53,8 +63,57 @@ env:
   NATIVE_CACHE_EPOCH: 1
 
 jobs:
+  # Severity enforced: shellcheck "error" (scripts and workflow run: blocks). Warnings are
+  # reported as annotations but do not fail yet: the scripts inherited from upstream rely on
+  # word splitting and on variables set by build.sh, and their warnings were never looked
+  # at. Raise --severity to warning once the reported ones are fixed or annotated.
+  lint:
+    name: Lint
+    runs-on: ubuntu-26.04
+    env:
+      # https://github.com/rhysd/actionlint/releases: version and the SHA-256 of
+      # actionlint_<version>_linux_amd64.tar.gz (from actionlint_<version>_checksums.txt)
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Check renovate.json is valid JSON
+        run: python3 -m json.tool renovate.json > /dev/null
+
+      # shellcheck is preinstalled on GitHub's Ubuntu runners.
+      # buildscripts/.shellcheckrc and buildscripts/scripts/.shellcheckrc configure it.
+      - name: shellcheck (errors fail)
+        run: |
+          shellcheck --version
+          git ls-files -z '*.sh' | xargs -0 shellcheck --severity=error
+
+      - name: shellcheck (warnings, reported only)
+        if: ${{ !cancelled() }}
+        run: |
+          git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning --format=gcc > "$RUNNER_TEMP/shellcheck.txt" || true
+          sed -E 's/^([^:]+):([0-9]+):([0-9]+): [a-z]+: (.*)$/::warning file=\1,line=\2,col=\3::\4/' "$RUNNER_TEMP/shellcheck.txt"
+          echo "shellcheck warnings (not enforced yet): $(grep -c . "$RUNNER_TEMP/shellcheck.txt" || true)" >> "$GITHUB_STEP_SUMMARY"
+
+      # A pinned release, checked against its SHA-256 before it runs. actionlint also runs
+      # shellcheck on every run: block, at the severity set by SHELLCHECK_OPTS.
+      - name: actionlint
+        env:
+          SHELLCHECK_OPTS: --severity=error
+        run: |
+          tarball="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/actionlint" actionlint
+          "$RUNNER_TEMP/actionlint/actionlint" -version
+          "$RUNNER_TEMP/actionlint/actionlint" -color
+
   native:
     name: Native (${{ matrix.abi }})
+    needs: lint
     runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
@@ -69,8 +128,9 @@ jobs:
         uses: actions/checkout@v7
 
       # Everything that decides what lands in prefix/<abi>: versions and checksums
-      # (depinfo.sh, also the NDK and meson), the download, patch and build scripts, the
-      # patches, the host tool list (include/install-system-deps.sh) and the runner OS.
+      # (depinfo.sh, also the NDK and meson), the commits the git tags are expected to be
+      # (include/tag-commits.txt), the download, patch and build scripts, the patches, the
+      # host tool list (include/install-system-deps.sh) and the runner OS.
       # player.sh and mpv-android.sh only run after the prefix is built, so they are left out.
       - name: Compute the cache key
         id: key
@@ -166,6 +226,29 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          ABI: ${{ matrix.abi }}
+          HIT: ${{ steps.restore.outputs.cache-hit }}
+          KEY: ${{ steps.key.outputs.key }}
+        run: |
+          if [ "$RELEASE" = true ]; then
+            cache="not used (release build: built from source)"
+          elif [ "$HIT" = true ]; then
+            cache="**hit**: restored, the native build was skipped"
+          else
+            cache="**miss**: built from source"
+          fi
+          libmpv=buildscripts/prefix/$ABI/lib/libmpv.so
+          {
+            echo "### Native ($ABI)"
+            echo
+            echo "- Native cache: $cache"
+            echo "- Key: \`$KEY\`"
+            if [ -f "$libmpv" ]; then echo "- libmpv.so: $(( $(wc -c < "$libmpv") / 1024 )) KiB (unstripped)"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   assemble:
     name: Assemble
     needs: native
@@ -201,13 +284,15 @@ jobs:
 
       # On the host: formatting, lints, and the unit tests of everything that needs
       # neither JNI nor mpv (string conversion, handle table, lifecycle gate, events).
+      # The test output is kept for the job summary.
       - name: Check and test the wrapper
         working-directory: libmpv/src/main/rust
         run: |
+          set -o pipefail
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo clippy --locked --target x86_64-linux-android --all-targets -- -D warnings
-          cargo test --locked
+          cargo test --locked 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
 
       - uses: actions/download-artifact@v8
         with:
@@ -233,11 +318,20 @@ jobs:
             ./build.sh -n --arch "$arch" player
           done
 
+      # The POM is the one a release publishes (same build files, same version); the SBOM
+      # takes the JVM dependencies from it.
       - name: Bundle the AAR
-        run: ./gradlew :libmpv:bundleReleaseAar --no-configuration-cache -PVERSION_NAME="$VERSION"
+        run: ./gradlew :libmpv:bundleReleaseAar :libmpv:generatePomFileForMavenPublication --no-configuration-cache -PVERSION_NAME="$VERSION"
 
+      # Libraries, system dependencies, 16 KiB alignment, and libplayer.so's size against
+      # its limit in check-aar.sh (the sizes go to the job summary)
       - name: Check AAR
         run: ./buildscripts/check-aar.sh
+
+      # Every `external fun` has its Java_* export in libplayer.so of every ABI, and no
+      # export is left without one: a missing one is an UnsatisfiedLinkError on a device
+      - name: Check the JNI exports
+        run: bash buildscripts/check-jni.sh
 
       # libmpv/api/libmpv.api is the public API apps compile against: a removed or
       # changed line breaks them, so any difference must be made on purpose
@@ -250,6 +344,8 @@ jobs:
         run: ./gradlew :libmpv:testDebugUnitTest --no-configuration-cache -PVERSION_NAME="$VERSION"
 
       - name: Write the SBOM and tool versions
+        env:
+          SBOM_POM: libmpv/build/publications/maven/pom-default.xml
         run: |
           mkdir -p "$RUNNER_TEMP/info"
           sbom="$RUNNER_TEMP/info/libmpv-$VERSION.cdx.json"
@@ -266,9 +362,12 @@ jobs:
                   problems.append(f"{c['name']}: no source reference")
               if not c["bom-ref"].startswith("crate:") and not c.get("licenses"):
                   problems.append(f"{c['name']}: no licence")
+          jvm = [c["name"] for c in bom["components"] if c["bom-ref"].startswith("maven:")]
+          if not jvm:
+              problems.append("no JVM dependencies (from the POM, SBOM_POM)")
           if problems:
               sys.exit("SBOM problems:\n  " + "\n  ".join(problems))
-          print(f"SBOM: {len(bom['components'])} components")
+          print(f"SBOM: {len(bom['components'])} components, JVM dependencies: {', '.join(jvm)}")
           EOF
           {
             echo "| runner image (wrapper, AAR) | $ImageOS $ImageVersion |"
@@ -303,8 +402,145 @@ jobs:
           path: ${{ runner.temp }}/info/
           if-no-files-found: error
 
+      # Also after a failure, with what there is. A suite that reports no tests fails a
+      # job that otherwise passed.
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          missing=0
+          aar=libmpv/build/outputs/aar/libmpv-release.aar
+          {
+            echo "### Assemble"
+            echo
+            bash buildscripts/test-summary.sh header
+            bash buildscripts/test-summary.sh cargo "Rust wrapper: host unit tests (cargo test)" "$RUNNER_TEMP/cargo-test.log" || missing=1
+            bash buildscripts/test-summary.sh junit "Kotlin: JVM unit tests (testDebugUnitTest)" libmpv/build/test-results/testDebugUnitTest || missing=1
+            echo
+            if [ -f "$aar" ]; then
+              echo "AAR \`libmpv-release.aar\` (version $VERSION): sha256 \`$(sha256sum "$aar" | cut -d' ' -f1)\`"
+              echo
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$missing" = 1 ] && [ "$JOB_STATUS" = success ]; then
+            echo "::error::A test suite reported no tests"
+            exit 1
+          fi
+
+  # One emulator per entry. fail-fast is off, so a failure on one entry does not cancel the
+  # others: each reports its own result and test report, and `needs.test.result` (what the
+  # Build job reads) is "failure" if any entry failed.
   test:
-    name: Instrumented tests
+    name: Instrumented tests (API ${{ matrix.api }}, ${{ matrix.abi }})
+    needs: assemble
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # r8-test: a test app that depends on the library with R8 minification on, so a
+          # missing consumer ProGuard rule fails where native code calls Kotlin by name.
+          # The rules do not depend on the ABI or the API level, so one entry runs it.
+          - { api: 34, abi: x86_64, tasks: ":libmpv:connectedDebugAndroidTest :r8-test:connectedReleaseAndroidTest" } # a current Android
+          - { api: 26, abi: x86_64, tasks: ":libmpv:connectedDebugAndroidTest" } # minSdk
+          - { api: 29, abi: x86, tasks: ":libmpv:connectedDebugAndroidTest" } # 32-bit: the newest API with a default x86 image
+    env:
+      API: ${{ matrix.api }}
+      ABI: ${{ matrix.abi }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-disabled: ${{ inputs.release || false }}
+
+      - name: Install SDK
+        working-directory: buildscripts
+        env:
+          IN_CI: 1
+          SDK_WITHOUT_NDK: 1
+        run: ./include/download-sdk.sh
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: jniLibs
+          path: ./libmpv/src/main/jniLibs
+
+      # Only the emulator's ABI: the app then has to load exactly these libraries (on x86,
+      # the 32-bit ones), and the test APK stays small
+      - name: Keep the ${{ matrix.abi }} libraries
+        run: |
+          [ -d "libmpv/src/main/jniLibs/$ABI" ] || { echo "::error::No $ABI libraries in the jniLibs artifact"; exit 1; }
+          find libmpv/src/main/jniLibs -mindepth 1 -maxdepth 1 ! -name "$ABI" -exec rm -rf {} +
+          ls -l "libmpv/src/main/jniLibs/$ABI"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instrumented tests
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          arch: ${{ matrix.abi }}
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: ./gradlew ${{ matrix.tasks }} --no-configuration-cache
+
+      # Always uploaded, under a name per entry: the report is the proof of what ran
+      - name: Upload test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-test-report-api${{ matrix.api }}-${{ matrix.abi }}
+          path: |
+            ./libmpv/build/reports/androidTests/
+            ./libmpv/build/outputs/androidTest-results/
+            ./r8-test/build/reports/androidTests/
+            ./r8-test/build/outputs/androidTest-results/
+          if-no-files-found: warn
+
+      # Gradle can exit 0 when the instrumentation process crashed before a test ran: the
+      # result XML then holds the failure. So the counts decide, not only the exit code.
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          TASKS: ${{ matrix.tasks }}
+        run: |
+          bad=0
+          {
+            echo "### Instrumented tests (API $API, $ABI)"
+            echo
+            bash buildscripts/test-summary.sh header
+            bash buildscripts/test-summary.sh junit "connectedDebugAndroidTest, API $API $ABI emulator" libmpv/build/outputs/androidTest-results || bad=1
+            case "$TASKS" in *r8-test*)
+              bash buildscripts/test-summary.sh junit "r8-test (library minified by R8), API $API $ABI emulator" r8-test/build/outputs/androidTest-results || bad=1 ;;
+            esac
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bad" = 1 ] && [ "$JOB_STATUS" = success ]; then
+            echo "::error::The instrumented tests ran no tests, or the reports hold failures although Gradle succeeded"
+            exit 1
+          fi
+
+  # publish.yaml does exactly this before it signs: bundle the AAR again in a fresh job
+  # from the uploaded jniLibs, and refuse to release unless the bytes are those of the AAR
+  # that was checked and tested. Run on every build, so a tag cannot be the first to find
+  # out. (Same mode normalisation as publish.yaml.)
+  reproducible:
+    name: Reproducible AAR
     needs: assemble
     runs-on: ubuntu-26.04
     steps:
@@ -339,10 +575,6 @@ jobs:
           name: libmpv-release.aar
           path: ${{ runner.temp }}/built
 
-      # publish.yaml does exactly this before it signs: bundle the AAR again in a fresh job
-      # from the uploaded jniLibs, and refuse to release unless the bytes are those of the
-      # AAR that was checked and tested. Run it on every build, so a tag cannot be the
-      # first to find out. (Same mode normalisation as publish.yaml.)
       - name: Check the AAR is reproducible
         run: |
           find libmpv/src/main/jniLibs -type f -exec chmod 0644 {} +
@@ -351,42 +583,11 @@ jobs:
           actual=$(sha256sum libmpv/build/outputs/aar/libmpv-release.aar | cut -d' ' -f1)
           if [ "$actual" != "$built" ]; then
             echo "::error::Bundling the same jniLibs in a fresh job gave a different AAR ($actual, assemble's is $built); publish.yaml would refuse to release it"
+            echo "### Reproducible AAR: **no** ($actual, assemble's is $built)" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "AAR sha256: $actual"
-
-      # The emulator is x86_64; the other ABIs would only make the test APK bigger
-      - name: Keep the x86_64 libraries
-        run: |
-          find libmpv/src/main/jniLibs -mindepth 1 -maxdepth 1 ! -name x86_64 -exec rm -rf {} +
-          ls -l libmpv/src/main/jniLibs/x86_64
-
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Instrumented tests
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
-        with:
-          api-level: 34
-          arch: x86_64
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew :libmpv:connectedDebugAndroidTest
-
-      # Always uploaded: Gradle does not print the test count, so the report is
-      # the only proof the tests ran on a passing build.
-      - name: Upload test report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-test-report
-          path: |
-            ./libmpv/build/reports/androidTests/
-            ./libmpv/build/outputs/androidTest-results/
-          if-no-files-found: warn
+          echo "### Reproducible AAR: yes, bundled again from the same jniLibs: sha256 \`$actual\`" >> "$GITHUB_STEP_SUMMARY"
 
   sources:
     name: Corresponding source
@@ -396,6 +597,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # Also fails if a git tag no longer resolves to the commit in include/tag-commits.txt
       - name: Download dependencies
         working-directory: buildscripts
         run: ./include/download-deps.sh
@@ -451,12 +653,18 @@ jobs:
       # only a release pays for full compression.
       - name: Pack corresponding source
         run: |
+          set -o pipefail
           name="libmpv-$VERSION-sources"
           level=0
           [ "$RELEASE" = true ] && level=6
           tar --exclude=.git --exclude=./buildscripts/sdk --exclude=./libmpv/src/main/rust/target \
               --transform "s,^\.,$name," -cf - . | xz -T0 -"$level" > "$RUNNER_TEMP/$name.tar.xz"
           ls -lh "$RUNNER_TEMP/$name.tar.xz"
+          {
+            echo "### Corresponding source"
+            echo
+            echo "Every ABI was built from the sources this job downloaded ($(grep -c . "$RUNNER_TEMP/sources.sha256") dependencies), plus $(find libmpv/src/main/rust/vendor -mindepth 1 -maxdepth 1 -type d | wc -l) vendored crates: \`$name.tar.xz\`, $(du -h "$RUNNER_TEMP/$name.tar.xz" | cut -f1)$([ "$RELEASE" = true ] && echo ", uploaded" || echo " (uploaded only by a release)")."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         if: ${{ inputs.release }}
@@ -469,10 +677,11 @@ jobs:
   # The branch ruleset on main requires a check named exactly "Build". It must be red
   # unless every job above succeeded: a skipped or cancelled job counts as a failure
   # (a skipped required check would otherwise count as passed). always() makes this
-  # job run, and report, in every one of those cases.
+  # job run, and report, in every one of those cases. For a matrix job (native, test),
+  # needs.<job>.result is "success" only if every entry succeeded.
   build:
     name: Build
-    needs: [native, assemble, test, sources]
+    needs: [lint, native, assemble, test, reproducible, sources]
     if: ${{ always() }}
     runs-on: ubuntu-26.04
     steps:
@@ -481,4 +690,11 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$NEEDS" | jq -e 'length == 4 and all(.[]; .result == "success")' > /dev/null
+          {
+            echo "### Build"
+            echo
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "$NEEDS" | jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$NEEDS" | jq -e 'length == 6 and all(.[]; .result == "success")' > /dev/null

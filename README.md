@@ -18,6 +18,7 @@ Landing page: <https://midasvo.nl/libmpv-android/>
 
 ## Use it
 
+<!-- example-unchecked: a Gradle build script -->
 ```kotlin
 dependencies {
     implementation("io.github.midasvo:libmpv:<version>")
@@ -29,6 +30,7 @@ and on the [releases page](https://github.com/midasvo/libmpv-android/releases). 
 no extra repository. On `main` (the next release), the library also brings
 `kotlinx-coroutines-core` with it (see [More of mpv's API](#more-of-mpvs-api-on-main-not-in-130)).
 
+<!-- example-unchecked: the 1.3.0 API, which has no region in DocExamples.kt -->
 ```kotlin
 import dev.jdtech.mpv.MPVLib
 
@@ -49,7 +51,9 @@ mpv.destroy()
 
 `MPVLib` creates an mpv instance, attaches it to a `Surface`, sets options and properties, runs
 commands, and passes mpv's events and log messages to observers (`addObserver`,
-`addLogObserver`). Observer callbacks run on mpv's event thread. Everything else is mpv itself:
+`addLogObserver`). Observer callbacks run on mpv's event thread (named `mpv-event` in traces, on
+`main`). The setters (`setPropertyInt`, `setPropertyString`, ...) log an mpv error rather than
+report it; see [Errors](#more-of-mpvs-api-on-main-not-in-130) for the calls that throw it. Everything else is mpv itself:
 its [manual](https://mpv.io/manual/stable/) is the reference for options, properties and commands.
 
 The Kotlin package is `dev.jdtech.mpv`, as upstream's ([ADR 0001](docs/adr/0001-keep-the-kotlin-package.md)).
@@ -58,8 +62,8 @@ they ship the same native libraries under the same file names.
 
 ## More of mpv's API (on `main`, not in 1.3.0)
 
-`main` adds structured values, suspend functions, flows and custom protocols, as extension
-functions on `MPVLib` in the same package ([ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)).
+`main` adds structured values, suspend functions, flows, custom protocols, `AutoCloseable` and a
+logcat level, as extension functions on `MPVLib` in the same package ([ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)).
 Nothing above changes: the 1.3.0 API is the same, and its observers get what they got before.
 The new functions report mpv's errors as `MpvException` (with mpv's code in `error`), where the
 classic ones return a code or `null`. All of them throw `IllegalStateException` after `destroy()`.
@@ -71,6 +75,7 @@ library.
 **Structured values.** `MpvNode` is mpv's `mpv_node`: maps, arrays and typed scalars instead of
 JSON text. Its accessors return `null` for a node of another kind, so a lookup reads like a path.
 
+<!-- example:structured-values -->
 ```kotlin
 import dev.jdtech.mpv.MpvNode
 import dev.jdtech.mpv.commandNode
@@ -89,11 +94,30 @@ Use these instead of `getPropertyString` on a structured property (`track-list`,
 `chapter-list`, `metadata`), and instead of `command` when you need a command's result, typed
 arguments, or its error. They block like the classic calls.
 
+**Errors.** The classic setters (`setPropertyInt`, `setPropertyDouble`, `setPropertyBoolean`,
+`setPropertyString`) log an mpv error and return nothing. `setPropertyNode` and
+`setPropertyAsync` set the same properties and throw the error as `MpvException`, with mpv's code
+in `error`:
+
+<!-- example:errors -->
+```kotlin
+import dev.jdtech.mpv.MpvException
+import dev.jdtech.mpv.MpvNode
+import dev.jdtech.mpv.setPropertyNode
+
+try {
+    mpv.setPropertyNode("speed", MpvNode.of(1.5))
+} catch (e: MpvException) {
+    showError(e.error) // an MPVLib.MpvError code, e.g. MPV_ERROR_PROPERTY_FORMAT
+}
+```
+
 **Suspend functions.** `commandAsync`, `getPropertyAsync` and `setPropertyAsync` use mpv's own
 async API: the calling thread is never blocked, so they are safe on the main thread. Cancelling
 the coroutine stops waiting (and aborts commands that support it); if the instance is destroyed
 while one is pending, it throws `IllegalStateException`.
 
+<!-- example:suspend-functions -->
 ```kotlin
 import dev.jdtech.mpv.MpvNode
 import dev.jdtech.mpv.commandAsync
@@ -108,6 +132,26 @@ scope.launch {
 }
 ```
 
+`getBooleanPropertyAsync`, `getLongPropertyAsync`, `getDoublePropertyAsync` and
+`getStringPropertyAsync` read a property in that type, without unwrapping an `MpvNode`. mpv
+converts the value as for the property flows (so `getLongPropertyAsync` gives a time in whole
+seconds); a property that cannot be read in that type throws `MpvException`
+(`MPV_ERROR_PROPERTY_FORMAT`).
+
+<!-- example:typed-async -->
+```kotlin
+import dev.jdtech.mpv.getBooleanPropertyAsync
+import dev.jdtech.mpv.getDoublePropertyAsync
+import dev.jdtech.mpv.getStringPropertyAsync
+import kotlinx.coroutines.launch
+
+scope.launch {
+    val paused: Boolean = mpv.getBooleanPropertyAsync("pause")
+    val position: Double = mpv.getDoublePropertyAsync("time-pos")
+    val title: String = mpv.getStringPropertyAsync("media-title")
+}
+```
+
 Prefer them on the main thread and wherever mpv may be busy (opening a file); the blocking calls
 are fine on a background thread and inside the observer callbacks.
 
@@ -119,6 +163,7 @@ ends. A property flow is conflated (a slow collector gets the latest value). The
 buffers 256 events per collector; beyond that it drops the newest and emits one
 `MpvPlayerEvent.Dropped(count)`. When the instance is destroyed, the flows complete.
 
+<!-- example:flows -->
 ```kotlin
 import dev.jdtech.mpv.MPVLib
 import dev.jdtech.mpv.MpvPlayerEvent
@@ -149,6 +194,7 @@ callback code and Java; `unobserveProperty(name)` now undoes `observeProperty`.
 `protocol://...` URIs through your Kotlin code: the `MpvStreamProvider` opens an `MpvStream`, which
 implements `read` and `close` (and `seek`, `size` and `cancel` where it can).
 
+<!-- example:custom-protocols -->
 ```kotlin
 import android.net.Uri
 import dev.jdtech.mpv.MpvStream
@@ -173,7 +219,44 @@ synchronous command that opens such a URI itself runs them on the calling thread
 call the same `MPVLib` instance: that throws `IllegalStateException`. The KDoc in `MpvStreams.kt`
 has the rules.
 
-Every public function and type has KDoc. The exact public API is in
+**Closing.** `MPVLib` implements `AutoCloseable`, and `close()` is `destroy()`, so `use` destroys
+the instance when the block ends, also when it throws:
+
+<!-- example:auto-close -->
+```kotlin
+import dev.jdtech.mpv.MPVLib
+
+val version = MPVLib.create(context)?.use { mpv ->
+    mpv.setOptionString("vo", "null")
+    mpv.init()
+    mpv.getPropertyString("mpv-version")
+} // destroyed here, also if the block throws
+```
+
+**Logcat.** libplayer writes every mpv log message to logcat (tag `mpv`) by default.
+`setLogcatLevel(level)`, with one of `MPVLib.MpvLogLevel`, reduces that echo, and
+`MPV_LOG_LEVEL_NONE` stops it. The `LogObserver`s still get every message at the level set with
+`requestLogMessages`. Verbose messages include the URLs mpv opens, so an app that plays
+authenticated URLs can keep its log to itself:
+
+<!-- example:logcat-level -->
+```kotlin
+import dev.jdtech.mpv.MPVLib
+import dev.jdtech.mpv.setLogcatLevel
+
+// keep only warnings and errors in logcat; the LogObservers still get every message
+mpv.setLogcatLevel(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_WARN)
+mpv.addLogObserver(object : MPVLib.LogObserver {
+    override fun logMessage(prefix: String, level: Int, text: String) {
+        appLog += "[$prefix] $text"
+    }
+})
+```
+
+Every public function and type has KDoc, and releases after 1.3.0 publish a sources jar, so an IDE
+shows both. The examples in this section are compiled with the unit tests
+(`libmpv/src/test/java/dev/jdtech/mpv/docs/DocExamples.kt`), and `buildscripts/check-docs.sh`
+checks that the README shows them unchanged. The exact public API is in
 [`libmpv/api/libmpv.api`](libmpv/api/libmpv.api).
 
 ## Released and unreleased
@@ -189,13 +272,17 @@ was built by the old single-job pipeline.
   nothing. `destroy()` from an observer or log callback throws `IllegalStateException` (call it
   from another thread). A `null` string argument throws `NullPointerException`.
 - **More of mpv's API** ([above](#more-of-mpvs-api-on-main-not-in-130), [ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)):
-  structured values (`MpvNode`), suspend functions on mpv's async API, flows of properties and
-  events, custom protocols implemented in Kotlin, and `unobserveProperty`. All additive. The
+  structured values (`MpvNode`), suspend functions on mpv's async API (also typed:
+  `getDoublePropertyAsync` and the rest), flows of properties and events, custom protocols
+  implemented in Kotlin, `unobserveProperty`, `AutoCloseable`, and `setLogcatLevel`. All additive.
+  The event thread is named `mpv-event`, and the release publishes a sources jar. The
   library now depends on `kotlinx-coroutines-core`.
 - **An mpv patch** that rounds the AudioTrack buffer to whole frames, so 22,050 Hz audio is no
   longer silent ([ephyra#659](https://github.com/midasvo/ephyra/issues/659)).
-- **More checks in CI:** the dynamic dependencies of every library in every ABI, and instrumented
-  tests that play a real file and check which decoders, demuxers and protocols the build contains.
+- **More checks in CI:** the dynamic dependencies of every library in every ABI, the wrapper's JNI
+  exports against the Kotlin declarations, and instrumented tests on three emulators (Android 8.0,
+  32-bit x86, and a current one) that play real files and subtitles, check which decoders, demuxers
+  and protocols the build contains, and run an app that uses the library minified by R8.
 - **A new build pipeline** ([ADR 0004](docs/adr/0004-build-pipeline.md)). Releases built by it also
   come with an SBOM and a provenance attestation.
 
@@ -211,8 +298,8 @@ Versions are not repeated here, so they cannot go stale:
   place every version is set. Patches to the sources are in [`buildscripts/patches/`](buildscripts/patches/).
 - **In a release:** the release notes list every component version. Releases built by the new
   pipeline also list the tools they were built with and attach an SBOM, `libmpv-<version>.cdx.json`
-  (CycloneDX), of the native components and the wrapper's Rust crates. JVM dependencies such as
-  `kotlinx-coroutines-core` are not in it; they are in the POM on Maven Central.
+  (CycloneDX) of the native components, the wrapper's Rust crates, and the JVM dependencies every
+  app gets with the AAR (`kotlinx-coroutines-core`, `kotlin-stdlib`, from its POM).
 - **On the landing page:** both, generated from the same files when the page is deployed.
 
 ## Building from source
@@ -230,6 +317,19 @@ cd buildscripts
 The AAR lands in `libmpv/build/outputs/aar/libmpv-release.aar`. [buildscripts/README.md](buildscripts/README.md)
 covers single ABIs, rebuilding one component, Android Studio, the AAR check and how CI runs the
 same scripts.
+
+To run the instrumented tests on an emulator or device without building the native libraries
+(also on Windows, in Git Bash), `buildscripts/local-test.sh` takes them from a published AAR,
+builds the wrapper for the device's ABI with cargo and the NDK, and runs the connected tests on
+the device you name:
+
+```sh
+buildscripts/local-test.sh --serial emulator-5554          # native libraries of the latest release
+buildscripts/local-test.sh --serial emulator-5554 --aar libmpv/build/outputs/aar/libmpv-release.aar --r8
+```
+
+It needs adb, the NDK version from `depinfo.sh`, a JDK, rustup and `gh` (for the download), and
+does not start an emulator or install anything. Its header has the details.
 
 ## Verifying a release
 

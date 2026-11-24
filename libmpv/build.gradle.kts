@@ -48,6 +48,8 @@ dependencies {
 
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // Dispatchers.Main, for the tests that call the suspend functions on the main thread
+    androidTestImplementation(libs.kotlinx.coroutines.android)
 }
 
 mavenPublishing {
@@ -57,7 +59,7 @@ mavenPublishing {
     configure(
         platform = AndroidSingleVariantLibrary(
             javadocJar = JavadocJar.Empty(),
-            sourcesJar = SourcesJar.Empty(),
+            sourcesJar = SourcesJar.Sources(),
             variant = "release",
         )
     )

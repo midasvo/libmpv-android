@@ -1,4 +1,4 @@
-public final class dev.jdtech.mpv.MPVLib {
+public final class dev.jdtech.mpv.MPVLib implements java.lang.AutoCloseable {
   public dev.jdtech.mpv.MPVLib(long, kotlin.jvm.internal.DefaultConstructorMarker);
   public final int commandWithResult(java.lang.String[]);
   public final int requestLogMessages(java.lang.String);
@@ -32,6 +32,7 @@ public final class dev.jdtech.mpv.MPVLib {
   public final void setPropertyString(java.lang.String, java.lang.String);
   public static final dev.jdtech.mpv.MPVLib create(android.content.Context);
   public static final dev.jdtech.mpv.MPVLib$Companion Companion;
+  public void close();
 }
 
 public final class dev.jdtech.mpv.MPVLib$Companion {
@@ -152,7 +153,11 @@ public final class dev.jdtech.mpv.MPVLib$MpvLogLevel {
 
 public final class dev.jdtech.mpv.MpvAsync {
   public static final java.lang.Object commandAsync(dev.jdtech.mpv.MPVLib, dev.jdtech.mpv.MpvNode, kotlin.coroutines.Continuation<? super dev.jdtech.mpv.MpvNode>);
+  public static final java.lang.Object getBooleanPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
+  public static final java.lang.Object getDoublePropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, kotlin.coroutines.Continuation<? super java.lang.Double>);
+  public static final java.lang.Object getLongPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, kotlin.coroutines.Continuation<? super java.lang.Long>);
   public static final java.lang.Object getPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, kotlin.coroutines.Continuation<? super dev.jdtech.mpv.MpvNode>);
+  public static final java.lang.Object getStringPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, kotlin.coroutines.Continuation<? super java.lang.String>);
   public static final java.lang.Object setPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, dev.jdtech.mpv.MpvNode, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 
@@ -168,6 +173,10 @@ public final class dev.jdtech.mpv.MpvFlows {
   public static final kotlinx.coroutines.flow.Flow<java.lang.Double> doublePropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
   public static final kotlinx.coroutines.flow.Flow<java.lang.Long> longPropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
   public static final kotlinx.coroutines.flow.Flow<java.lang.String> stringPropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
+}
+
+public final class dev.jdtech.mpv.MpvLogging {
+  public static final void setLogcatLevel(dev.jdtech.mpv.MPVLib, int);
 }
 
 public abstract class dev.jdtech.mpv.MpvNode {

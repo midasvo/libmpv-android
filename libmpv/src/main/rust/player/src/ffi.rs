@@ -47,6 +47,7 @@ pub const MPV_ERROR_LOADING_FAILED: c_int = -13;
 pub const MPV_ERROR_UNSUPPORTED: c_int = -18;
 pub const MPV_ERROR_GENERIC: c_int = -20;
 
+pub const MPV_LOG_LEVEL_NONE: c_int = 0;
 pub const MPV_LOG_LEVEL_FATAL: c_int = 10;
 pub const MPV_LOG_LEVEL_ERROR: c_int = 20;
 pub const MPV_LOG_LEVEL_WARN: c_int = 30;

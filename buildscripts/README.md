@@ -1,6 +1,6 @@
 # Building
 
-The build runs on Linux (CI uses Ubuntu 24.04). It has three parts:
+The build runs on Linux (CI uses Ubuntu 26.04). It has three parts:
 
 1. **Native libraries**: libmpv, FFmpeg and their dependencies, one prefix per ABI (`prefix/<abi>`).
 2. **The JNI wrapper**: the Rust crate in `libmpv/src/main/rust`, built into `libplayer.so` by `scripts/player.sh`, which also puts every library the AAR ships for that ABI into `libmpv/src/main/jniLibs/<abi>`: the shared libraries from the prefix, `libplayer.so` and the NDK's `libc++_shared.so`, all stripped.
@@ -25,7 +25,13 @@ before running the script, it will still install the necessary SDK packages.
 
 A matching NDK version inside the SDK will be picked up automatically or downloaded/installed otherwise.
 
-The dependencies fetched as release tarballs (lua, curl, libunibreak) are verified against SHA-256 checksums kept next to their versions in `include/depinfo.sh` (`sha256_*`); when you bump one of those versions, update its checksum too. `gas-preprocessor` is pinned to a commit (`v_gas_preprocessor`) in the same file. The Rust crates are pinned, with checksums, by `libmpv/src/main/rust/Cargo.lock`, and the build uses `--locked`.
+The dependencies fetched as release tarballs (lua, curl, libunibreak) are verified against SHA-256 checksums kept next to their versions in `include/depinfo.sh` (`sha256_*`). The others are git tags, and each clone is checked against the commit its tag resolved to when it was recorded, in `include/tag-commits.txt`: a tag that now gives another commit (moved upstream) fails the download, a tag without a record (a version bump) only warns. After a version bump, run
+
+```shell
+./update-checksums.sh [<name>...]   # --check: change nothing, fail on a difference
+```
+
+It downloads each tarball, prints the recorded and the new SHA-256, checks the download against what the project publishes (lua.org's checksum list, the GitHub release's asset digest for libunibreak, curl's GPG signature when the key is in your keyring), writes the new `sha256_*`, and records the commit of every git tag (`git ls-remote`; the commit, also for an annotated tag). A recorded tag that moved is an error unless you pass `--accept-moved-tags <name>`; then also bump `NATIVE_CACHE_EPOCH` in `build.yaml`. `gas-preprocessor` is pinned to a commit (`v_gas_preprocessor`) in the same file. The Rust crates are pinned, with checksums, by `libmpv/src/main/rust/Cargo.lock`, and the build uses `--locked`.
 
 ## Patching
 
@@ -65,9 +71,12 @@ The targets are the components in the dependency tree at the bottom of `include/
 
 ```shell
 ./sbom.sh <version> > libmpv-<version>.cdx.json
+# with the JVM dependencies, from the POM Gradle generates for the publication:
+(cd .. && ./gradlew :libmpv:generatePomFileForMavenPublication -PVERSION_NAME=<version>)
+SBOM_POM=../libmpv/build/publications/maven/pom-default.xml ./sbom.sh <version> > libmpv-<version>.cdx.json
 ```
 
-writes a CycloneDX SBOM of the bundled native components: every library in `depinfo.sh` with version, licence and source, the NDK's libc++, the wrapper (licence from its `Cargo.toml`) and the crates in its `Cargo.lock`. Licences and source locations live in the table at the top of `sbom.sh`; when you add a dependency to `depinfo.sh`, add it there too (the script fails on a `v_*` entry it does not know). CI runs it on every build and attaches the result to each release.
+writes a CycloneDX SBOM of the bundled native components: every library in `depinfo.sh` with version, licence and source, the NDK's libc++, the wrapper (licence from its `Cargo.toml`) and the crates in its `Cargo.lock`. With `SBOM_POM`, it also lists the JVM dependencies that POM declares (`kotlinx-coroutines-core`, `kotlin-stdlib`), with the versions from the POM, so the SBOM says what Maven Central publishes. Licences and source locations live in the tables at the top of `sbom.sh`; when you add a dependency to `depinfo.sh` or the POM, add it there too (the script fails on a `v_*` entry or a POM dependency it does not know). CI runs it on every build, with the POM, and attaches the result to each release.
 
 # Developing
 
@@ -119,11 +128,19 @@ After building the AAR, `check-aar.sh` checks it:
 ./check-aar.sh [path-to-aar]   # default: libmpv/build/outputs/aar/libmpv-release.aar
 ```
 
-It fails with a list of every problem if an ABI is missing one of the expected libraries (`libmpv.so`, `libplayer.so`, the FFmpeg libraries, `libc++_shared.so`) or has an empty one, if any `.so` of any ABI has a `DT_NEEDED` entry that is neither another library in the same ABI directory nor one of the Android system libraries on the script's allowlist (`system_libs`, limited to what the libraries need today and all present at API 26), or if a 64-bit `.so` has `LOAD` segments aligned below 16 KiB (needed for 16 KiB page size devices). The dependency check covers every ABI because CI only loads x86_64 on the emulator; a new system dependency fails it until someone confirms the library exists on API 26 devices and adds it to the allowlist. On success it prints the file count and size per ABI. It needs `unzip` and `readelf` (or `llvm-readelf`).
+It fails with a list of every problem if an ABI is missing one of the expected libraries (`libmpv.so`, `libplayer.so`, the FFmpeg libraries, `libc++_shared.so`) or has an empty one, if any `.so` of any ABI has a `DT_NEEDED` entry that is neither another library in the same ABI directory nor one of the Android system libraries on the script's allowlist (`system_libs`, limited to what the libraries need today and all present at API 26), or if a 64-bit `.so` has `LOAD` segments aligned below 16 KiB (needed for 16 KiB page size devices). The dependency check covers every ABI because CI only loads x86_64 and x86 on emulators; a new system dependency fails it until someone confirms the library exists on API 26 devices and adds it to the allowlist. It also fails if the stripped `libplayer.so` of an ABI is larger than its limit (`libplayer_max_kib` in the script, about 20% above the sizes of November 2026): raising a limit is a one-line change that shows up in review. On success it prints the file count and size per ABI and the size of `libplayer.so`. It needs `unzip` and `readelf` (or `llvm-readelf`).
+
+```shell
+./check-jni.sh [path-to-aar]
+```
+
+checks that `libplayer.so` of every ABI exports exactly the JNI functions that the `native` (`external`) methods in the AAR's `classes.jar` need, by their JNI names (mangled as the JNI specification says; overloaded methods need the long name). A declared method without an export would throw `UnsatisfiedLinkError` on its first call; an export without a declaration is reported as left over or misspelt. It needs a JDK (`jar`, `javap`) and `readelf`.
 
 ## CI
 
-`.github/workflows/build.yaml` runs the same scripts, split into jobs: one per ABI for the native libraries (`build.sh --arch <a> mpv`, in parallel), then one that builds the wrapper and the AAR (`build.sh -n --arch <a> player`, Gradle), the instrumented tests, and a job that packs the corresponding source. Each ABI's prefix is cached, keyed on `include/`, `build.sh`, `download.sh`, `patch.sh`, `scripts/` (except `player.sh` and `mpv-android.sh`) and `patches/`, so a change to anything else (the wrapper, Kotlin, Gradle, the workflows) skips the native build. Release builds never use the cache. To throw every cached prefix away, bump `NATIVE_CACHE_EPOCH` in `build.yaml`.
+`.github/workflows/build.yaml` runs the same scripts, split into jobs: a lint job first (`shellcheck` on every `*.sh`, configured by the `.shellcheckrc` files here, and `actionlint` on the workflows), one job per ABI for the native libraries (`build.sh --arch <a> mpv`, in parallel), then one that builds the wrapper and the AAR (`build.sh -n --arch <a> player`, Gradle) and runs `check-aar.sh`, `check-jni.sh`, `check-api.sh` and the host tests, the instrumented tests on three emulators (API 34 and 26 on x86_64, API 29 on x86), a job that bundles the AAR again to check it is reproducible, and a job that packs the corresponding source. Each ABI's prefix is cached, keyed on `include/` (with `tag-commits.txt`), `build.sh`, `download.sh`, `patch.sh`, `scripts/` (except `player.sh` and `mpv-android.sh`) and `patches/`, so a change to anything else (the wrapper, Kotlin, Gradle, the workflows) skips the native build. Release builds never use the cache. To throw every cached prefix away, bump `NATIVE_CACHE_EPOCH` in `build.yaml`.
+
+`test-summary.sh` turns the test reports (JUnit XML, `cargo test` output) into the rows of the job summaries, and `api-diff.sh <previous-tag>` writes the API section of the release notes (what changed in `libmpv/api/libmpv.api` since that tag).
 
 `include/hash-sources.sh` hashes the downloaded and patched sources; CI uses it to check that the source tarball of a release holds exactly what each ABI was built from.
 

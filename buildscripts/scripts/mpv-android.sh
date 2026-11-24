@@ -23,4 +23,5 @@ for abi in armeabi-v7a arm64-v8a x86 x86_64; do
 		echo >&2 "Warning: no libplayer.so for $abi in libmpv/src/main/jniLibs, the AAR will not support it"
 done
 
-./gradlew assembleRelease
+# only the library: the root project also holds r8-test, a test app
+./gradlew :libmpv:assembleRelease
