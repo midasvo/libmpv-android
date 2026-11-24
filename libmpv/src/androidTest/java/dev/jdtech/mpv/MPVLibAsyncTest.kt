@@ -57,9 +57,11 @@ class MPVLibAsyncTest {
             assertEquals(true, mpv.getBooleanPropertyAsync("mute"))
             mpv.setPropertyInt("osd-duration", 1234)
             assertEquals(1234L, mpv.getLongPropertyAsync("osd-duration"))
-            // beyond 32 bits, unlike getPropertyInt
-            mpv.setPropertyString("demuxer-max-bytes", "3000000000")
-            assertEquals(3_000_000_000L, mpv.getLongPropertyAsync("demuxer-max-bytes"))
+            // Beyond 32 bits, unlike getPropertyInt. The option's maximum is SIZE_MAX / 2,
+            // which is below 2^32 on a 32-bit ABI: there mpv refuses the larger value.
+            val big = if (android.os.Process.is64Bit()) 3_000_000_000L else 2_000_000_000L
+            mpv.setPropertyString("demuxer-max-bytes", big.toString())
+            assertEquals(big, mpv.getLongPropertyAsync("demuxer-max-bytes"))
             val title = "async 🎵 Ünïcödé"
             mpv.setPropertyString("title", title)
             assertEquals(title, mpv.getStringPropertyAsync("title"))
