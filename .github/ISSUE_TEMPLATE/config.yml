@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A question about mpv itself (options, properties, commands, scripts)
+    url: https://github.com/mpv-player/mpv/discussions
+    about: mpv's own behaviour is documented in its manual (https://mpv.io/manual/stable/) and discussed by the mpv project. Ask there; this repository only builds and wraps it.
+  - name: A security problem
+    url: https://github.com/midasvo/libmpv-android/blob/main/SECURITY.md
+    about: Do not post the details in a public issue. SECURITY.md says how to report it.

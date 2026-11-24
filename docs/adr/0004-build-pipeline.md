@@ -24,6 +24,8 @@ What has to stay true:
 
 `.github/workflows/build.yaml` is the only build definition. Its header comment shows the jobs:
 
+- **`lint`** runs shellcheck on the scripts and actionlint on the workflows before anything
+  expensive starts. (Added later, with the jobs below that say so.)
 - **`native`, one job per ABI, in parallel.** Each runs `build.sh --arch <arch> mpv` and hands on
   the shared libraries of its prefix, a hash of the sources it built from
   (`include/hash-sources.sh`) and the versions of the host tools.
@@ -31,13 +33,16 @@ What has to stay true:
   `scripts/player.sh` puts everything the AAR ships for that ABI, stripped, into
   `libmpv/src/main/jniLibs/<abi>`. Gradle then only packages: no CMake, no NDK, no native code. The
   job writes the SBOM (`sbom.sh`) and runs the checks that need no device: the wrapper's `cargo`
-  checks and host tests, `check-aar.sh`, the API check, the JVM unit tests and `check-docs.sh`
-  (RELEASING.md lists them).
-- **`test`** bundles the AAR again from the same `jniLibs` in a fresh job and fails unless the bytes
-  match, then runs the instrumented tests on an x86_64 emulator.
+  checks and host tests, `check-aar.sh`, `check-jni.sh`, the API check, the JVM unit tests and
+  `check-docs.sh` (RELEASING.md lists them).
+- **`test`** runs the instrumented tests on three emulators: API 34 x86_64 (which also runs the R8
+  test app), API 26 x86_64 (minSdk) and API 29 x86 (32-bit). Each loads only its own ABI.
+- **`reproducible`** bundles the AAR again from the same `jniLibs` in a fresh job and fails unless
+  the bytes match. It was part of `test` at first; on its own, its failure no longer hides the test
+  results.
 - **`sources`** packs the corresponding source, with the Rust crates vendored, and fails unless its
   sources hash the same as what every ABI was built from.
-- **`Build`** runs always and is green only if all four jobs succeeded. It is the required check.
+- **`Build`** runs always and is green only if every job above succeeded. It is the required check.
 
 `publish.yaml` calls `build.yaml` with `release: true` and adds only what a release needs on top:
 signing, the provenance attestation, the draft GitHub release and the Maven Central upload. It
@@ -60,7 +65,8 @@ The cache rules:
 ## Consequences
 
 - A pull request that does not touch the native build skips it. One that does builds the four ABIs
-  at the same time. How long either takes has not been measured yet.
+  at the same time. Measured before the extra emulators were added: about 11 to 12 minutes for a
+  whole run without the native cache, about 6 with it.
 - A release builds the same jobs as every pull request, with no cache. A failure that only a release
   would show can only come from the release-only steps in `publish.yaml`. The dry run exercises all
   of those except the attestation, the draft release and the upload.
@@ -70,11 +76,12 @@ The cache rules:
   with it (autoconf, nasm and the rest from apt). A runner image update can change those without a
   rebuild. Every release rebuilds without the cache, and its notes list the tool versions.
 - If an upstream project moves a tag, a cached build no longer matches what a fresh download gets.
-  The `sources` job catches that and says to bump `NATIVE_CACHE_EPOCH`.
+  The download step catches that first (`include/tag-commits.txt` records each tag's commit), and
+  the `sources` job as a second line. Either says to bump `NATIVE_CACHE_EPOCH`.
 - Building the wrapper outside Gradle means Android Studio cannot rebuild it. After changing the
   wrapper, run `./build.sh -n` (`buildscripts/README.md`).
 - The jobs hand files to each other as artifacts, which do not keep file modes. `player.sh`,
-  the `test` job and `publish.yaml` all set the same mode (0644), or the AAR would differ.
+  the `reproducible` job and `publish.yaml` all set the same mode (0644), or the AAR would differ.
 
 ## Alternatives considered
 
@@ -90,12 +97,11 @@ The cache rules:
   has to be built, published, versioned and updated, and its own sources become part of what a
   release depends on. The jobs also rely on what the GitHub runner provides: the preinstalled
   Android SDK (`download-sdk.sh` links it with `IN_CI=1`) and KVM for the emulator. The runner image
-  is pinned to `ubuntu-24.04`, meson is pinned in `depinfo.sh`, and the release notes record the
-  rest. The cache already removes most of the time a container would save.
+  is pinned (`ubuntu-26.04` now; it was `ubuntu-24.04` when this was decided), meson is pinned in
+  `depinfo.sh`, and the release notes record the rest. The cache already removes most of the time a container would save.
 
 ## Revisit when
 
 - A runner image update breaks or changes the native build in a way the pinned versions do not
   catch: then pinning the host tools (or a container) is worth its cost.
-- Builds are measured and the per-ABI jobs turn out not to be faster, or the cache misses most of
-  the time.
+- The per-ABI jobs stop being faster than one job would be, or the cache misses most of the time.
