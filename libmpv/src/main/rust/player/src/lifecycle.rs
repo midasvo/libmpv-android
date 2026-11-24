@@ -321,6 +321,11 @@ mod tests {
             let calls = Arc::clone(&calls);
             lc.start_worker(|| -> Result<_, ()> {
                 let h = thread::spawn(move || {
+                    // One call before reporting in: otherwise the closer can
+                    // set `stop` before the loop below has run once, and the
+                    // final assertion on `calls` fails (it did, once, in CI).
+                    drop(lc2.enter().expect("open"));
+                    calls.fetch_add(1, Ordering::SeqCst);
                     running_tx.send(()).unwrap();
                     while !stop.load(Ordering::SeqCst) {
                         let call = lc2.enter().expect("admitted until the worker is joined");
