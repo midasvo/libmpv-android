@@ -155,8 +155,12 @@ once from Renovate here, once through the sync PR.
 - **Rust crates.** Renovate's built-in Cargo manager proposes bumps of `Cargo.toml` and
   `Cargo.lock`, which pins every crate with its checksum (the build uses `--locked`). A crate bump
   does not touch the native cache: only the wrapper is rebuilt. The new crate lands in the SBOM and
-  in the vendored source of the next release. `renovate.json` has no rule for the Rust toolchain in
-  `libmpv/src/main/rust/rust-toolchain.toml`; bump that by hand.
+  in the vendored source of the next release.
+- **The Rust toolchain and the runner image.** Renovate also bumps the channel in
+  `libmpv/src/main/rust/rust-toolchain.toml` and the `runs-on` image in the workflows. Neither is in
+  the native cache key by name, but the runner image is (`ImageOS`), so an image bump rebuilds all
+  four ABIs. Check the wrapper's size and the host tests after a toolchain bump, and the tool
+  versions in the build log after an image bump.
 - **Not tracked:** the NDK, SDK and platform versions in `depinfo.sh`. Upstream's bumps of those
   arrive through the sync.
 - **The same version on both sides** merges without a conflict, whichever lands first. **Different
@@ -239,7 +243,7 @@ patch version.
 
 **Not proven yet.** No release has been made with this pipeline; 1.3.0 was the last one made with the
 old one. The dry run covers the build, the signing, the release notes and the Maven publication
-(to the runner's local repository). What only a real release exercises: the `release` environment and its secrets, the
+(to the runner's local repository); it ran once on `main`, on 2026-11-24, and passed. What only a real release exercises: the `release` environment and its secrets, the
 provenance attestation, `gh release create` of the draft, and the upload to Maven Central. Watch the
 first release closely and check the attestation (step 7).
 
