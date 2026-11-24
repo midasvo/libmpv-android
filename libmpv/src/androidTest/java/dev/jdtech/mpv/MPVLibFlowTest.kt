@@ -193,12 +193,13 @@ class MPVLibFlowTest {
                     gate.receive()
                 }
             }
-            val fast = async(start = CoroutineStart.UNDISPATCHED) {
-                mpv.eventFlow().filterIsInstance<MpvPlayerEvent.ClientMessage>()
-                    .first { it.args == listOf("libmpv-test", "$count") }
-            }
             for (i in 1..count) mpv.command(arrayOf("script-message", "libmpv-test", "$i"))
-            fast.await() // all of them went through mpv's event thread meanwhile
+            // Wait until all of them went through mpv's event thread: the reply to an async
+            // call is delivered by that thread, after the events queued before it. (A second
+            // collector waiting for the last message is no barrier: it runs on this thread,
+            // cannot drain while the loop above runs, and so can lose that message itself.
+            // That made this test time out once on the 32-bit emulator.)
+            mpv.getPropertyAsync("mpv-version")
 
             // drain the slow one up to the marker
             while (slowSeen.none { it is MpvPlayerEvent.Dropped }) gate.send(Unit)
