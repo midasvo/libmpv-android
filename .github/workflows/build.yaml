@@ -439,9 +439,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { api: 34, abi: x86_64 } # a current Android
-          - { api: 26, abi: x86_64 } # minSdk
-          - { api: 29, abi: x86 } # 32-bit: the newest API with a default x86 image
+          # r8-test: a test app that depends on the library with R8 minification on, so a
+          # missing consumer ProGuard rule fails where native code calls Kotlin by name.
+          # The rules do not depend on the ABI or the API level, so one entry runs it.
+          - { api: 34, abi: x86_64, tasks: ":libmpv:connectedDebugAndroidTest :r8-test:connectedReleaseAndroidTest" } # a current Android
+          - { api: 26, abi: x86_64, tasks: ":libmpv:connectedDebugAndroidTest" } # minSdk
+          - { api: 29, abi: x86, tasks: ":libmpv:connectedDebugAndroidTest" } # 32-bit: the newest API with a default x86 image
     env:
       API: ${{ matrix.api }}
       ABI: ${{ matrix.abi }}
@@ -493,7 +496,7 @@ jobs:
           arch: ${{ matrix.abi }}
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew :libmpv:connectedDebugAndroidTest
+          script: ./gradlew ${{ matrix.tasks }} --no-configuration-cache
 
       # Always uploaded, under a name per entry: the report is the proof of what ran
       - name: Upload test report
@@ -504,23 +507,31 @@ jobs:
           path: |
             ./libmpv/build/reports/androidTests/
             ./libmpv/build/outputs/androidTest-results/
+            ./r8-test/build/reports/androidTests/
+            ./r8-test/build/outputs/androidTest-results/
           if-no-files-found: warn
 
+      # Gradle can exit 0 when the instrumentation process crashed before a test ran: the
+      # result XML then holds the failure. So the counts decide, not only the exit code.
       - name: Summary
         if: ${{ !cancelled() }}
         env:
           JOB_STATUS: ${{ job.status }}
+          TASKS: ${{ matrix.tasks }}
         run: |
-          missing=0
+          bad=0
           {
             echo "### Instrumented tests (API $API, $ABI)"
             echo
             bash buildscripts/test-summary.sh header
-            bash buildscripts/test-summary.sh junit "connectedDebugAndroidTest, API $API $ABI emulator" libmpv/build/outputs/androidTest-results || missing=1
+            bash buildscripts/test-summary.sh junit "connectedDebugAndroidTest, API $API $ABI emulator" libmpv/build/outputs/androidTest-results || bad=1
+            case "$TASKS" in *r8-test*)
+              bash buildscripts/test-summary.sh junit "r8-test (library minified by R8), API $API $ABI emulator" r8-test/build/outputs/androidTest-results || bad=1 ;;
+            esac
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$missing" = 1 ] && [ "$JOB_STATUS" = success ]; then
-            echo "::error::The instrumented tests reported no tests"
+          if [ "$bad" = 1 ] && [ "$JOB_STATUS" = success ]; then
+            echo "::error::The instrumented tests ran no tests, or the reports hold failures although Gradle succeeded"
             exit 1
           fi
 

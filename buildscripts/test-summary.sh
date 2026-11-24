@@ -7,8 +7,9 @@
 #                                            as Gradle writes them for unit and connected tests
 #   test-summary.sh cargo <label> <log>      the "test result:" lines of cargo test's output
 #
-# Exits 1 when no test was found, so a run that silently ran nothing is not reported as a pass
-# (the row is printed anyway).
+# Exits 1 when no test was found or one failed, so a run that silently ran nothing, or whose
+# report holds a failure the test runner did not turn into an exit code, is not reported as a
+# pass (the row is printed anyway).
 set -euo pipefail
 
 mode=${1:?usage: test-summary.sh header | junit <label> <dir>... | cargo <label> <log>}
@@ -32,16 +33,16 @@ case "$mode" in
 		if [ ${#files[@]} -eq 0 ]; then
 			counts="0 0 0"
 		else
-			# the attributes of each file's <testsuite> element (one per file, in Gradle's reports)
+			# every <testsuite> element: one per file for unit tests, several inside one
+			# <testsuites> per device for connected tests
 			counts=$(awk '
 				function attr(name,    s) {
 					if (!match(head, " " name "=\"[0-9]+\"")) return 0
 					s = substr(head, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); return s + 0
 				}
-				/<testsuite[ >]/ && !done[FILENAME] {
+				/<testsuite[ >]/ {
 					head = $0; sub(/^.*<testsuite /, " ", head); sub(/>.*$/, "", head)
 					t += attr("tests"); f += attr("failures") + attr("errors"); s += attr("skipped")
-					done[FILENAME] = 1
 				}
 				END { print t + 0, f + 0, s + 0 }' "${files[@]}")
 		fi
@@ -70,3 +71,4 @@ read -r total failed skipped <<< "$counts"
 passed=$((total - failed - skipped))
 echo "| $label | $total | $passed | $failed | $skipped |"
 [ "$total" -gt 0 ] || { echo "test-summary.sh: no tests found for $label" >&2; exit 1; }
+[ "$failed" -eq 0 ] || { echo "test-summary.sh: $failed failed for $label" >&2; exit 1; }
