@@ -3,15 +3,27 @@ name: Pages
 # Publishes site/ to GitHub Pages at https://midasvo.nl/libmpv-android/ (the custom domain of
 # midasvo.github.io). Needs Settings → Pages → Source set to "GitHub Actions". Fork-only: upstream
 # has no site/, and the guard keeps this from running anywhere else. Only main deploys, also by hand.
+#
+# The page's version numbers and component table come from site/data.js, which is not committed:
+# buildscripts/site-data.sh writes it here, from depinfo.sh and sbom.sh on main and from depinfo.sh
+# at the tag of the latest version on Maven Central. The daily run brings a new release to the page
+# without a push. If Maven Central cannot be reached, the job fails and the deployed page stays.
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * *" # daily, 06:30 UTC
   push:
     branches:
       - main
     paths:
       - "site/**"
       - ".github/workflows/pages.yaml"
+      - "buildscripts/site-data.sh"
+      - "buildscripts/sbom.sh"
+      - "buildscripts/include/depinfo.sh"
+      - "buildscripts/patches/**"
+      - "libmpv/src/main/rust/Cargo.toml"
 
 permissions:
   contents: read
@@ -26,7 +38,7 @@ jobs:
   deploy:
     name: Deploy site
     if: github.repository == 'midasvo/libmpv-android' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -34,6 +46,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # site-data.sh reads depinfo.sh at the release tag
+
+      # A copy, so that the files of the checkout (site/.gitignore, a stray data.js) stay out
+      - name: Generate the site data
+        run: |
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site"
+          cp -R site/. "$site/"
+          rm -f "$site/.gitignore" "$site/data.js"
+          ./buildscripts/site-data.sh > "$site/data.js"
+          cat "$site/data.js"
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
@@ -41,7 +65,7 @@ jobs:
       - name: Upload site
         uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: ${{ runner.temp }}/site
 
       - name: Deploy to GitHub Pages
         id: deployment

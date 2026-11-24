@@ -6,7 +6,8 @@ v_platform=android-37.0
 v_sdk=16111833_latest
 v_ndk=30.0.16248370
 v_sdk_build_tools=37.0.0
-v_cmake=4.1.2
+# Host build tool, installed by include/install-system-deps.sh (pip)
+v_meson=1.12.1
 
 v_lua=5.2.4
 v_libunibreak=8_0
@@ -50,4 +51,7 @@ dep_libass=(freetype fontconfig fribidi harfbuzz libunibreak)
 dep_lua=()
 dep_libplacebo=()
 dep_mpv=(ffmpeg libass lua libplacebo curl)
-dep_mpv_android=(mpv)
+# player: the JNI wrapper (Rust crate in libmpv/src/main/rust), built by scripts/player.sh,
+# which also fills libmpv/src/main/jniLibs/<abi> with everything the AAR ships
+dep_player=(mpv)
+dep_mpv_android=(player)

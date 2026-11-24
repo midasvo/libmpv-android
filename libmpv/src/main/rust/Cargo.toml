@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["player"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+# libplayer.so is a small JNI glue library: optimise for size, build it as one
+# codegen unit with full LTO (smaller, and the same output on every run), and
+# drop the local symbol table. The exported Java_* functions live in .dynsym,
+# which stripping keeps.
+[profile.release]
+opt-level = "s"
+codegen-units = 1
+lto = "fat"
+debug = false
+strip = "symbols"
+incremental = false
+# Every JNI entry point catches panics and turns them into a Java exception;
+# that needs unwinding. Never change this to "abort".
+panic = "unwind"

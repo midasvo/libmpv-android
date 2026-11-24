@@ -3,6 +3,7 @@ package dev.jdtech.mpv
 import android.content.Context
 import android.util.Log
 import android.view.Surface
+import dev.jdtech.mpv.internal.MpvRuntime
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -16,13 +17,25 @@ import java.util.concurrent.CopyOnWriteArrayList
  * call [destroy] (it throws [IllegalStateException]: post it to another thread)
  * and must not block on a thread that is calling [destroy], which waits for the
  * callback to return.
+ *
+ * More of mpv's client API is available as extension functions: structured values
+ * ([getPropertyNode], [commandNode], [MpvNode]), suspend functions on mpv's async API
+ * ([commandAsync], [getPropertyAsync], [setPropertyAsync]), property and event flows
+ * ([doublePropertyFlow], [nodePropertyFlow], [eventFlow], ...), [unobserveProperty], and
+ * custom protocols implemented in Kotlin ([registerStreamProtocol]).
  */
 @Suppress("unused")
 class MPVLib private constructor(nativePtr: Long) {
+    // Volatile: read by every thread that calls in, written by create and destroy.
+    @Volatile
     private var nativeInstance: Long = 0
     // Copy-on-write so observers may add or remove observers from inside a callback.
     private val observers = CopyOnWriteArrayList<EventObserver>()
     private val logObservers = CopyOnWriteArrayList<LogObserver>()
+
+    // The state behind the node, async, flow and stream functions (MpvNodes.kt,
+    // MpvAsync.kt, MpvFlows.kt, MpvStreams.kt).
+    internal val runtime = MpvRuntime({ handle() })
 
     companion object {
         init {
@@ -54,6 +67,12 @@ class MPVLib private constructor(nativePtr: Long) {
         }
     }
 
+    /** The native handle, for the functions in the other files; throws like every method once destroyed. */
+    internal fun handle(): Long {
+        checkCreated()
+        return nativeInstance
+    }
+
     private external fun nativeCreate(thiz: MPVLib, appctx: Context): Long
 
     fun init() {
@@ -62,10 +81,22 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeInit(instance: Long)
 
+    /**
+     * Destroys the instance: stops mpv's event thread, closes every custom stream and
+     * destroys mpv (mpv_terminate_destroy). Returns once all of that is done; if another
+     * thread is destroying the instance already, it waits for that thread to finish.
+     * Throws [IllegalStateException] (and changes nothing) when called from an observer
+     * callback or a stream callback of this instance, which the teardown waits for.
+     */
     fun destroy() {
-        if (nativeInstance != 0L) {
-            nativeDestroy(nativeInstance)
+        val handle = nativeInstance
+        if (handle != 0L) {
+            // returns after the teardown, also when another thread is doing it
+            nativeDestroy(handle)
             nativeInstance = 0L
+            // no reply or event can come anymore: fail the pending calls, end the flows
+            // (idempotent: each concurrent destroy() runs it, so each returns after it)
+            runtime.onDestroyed()
         }
     }
     private external fun nativeDestroy(instance: Long)
@@ -169,6 +200,10 @@ class MPVLib private constructor(nativePtr: Long) {
     }
     private external fun nativeSetPropertyString(instance: Long, property: String, value: String)
 
+    /**
+     * Delivers changes of [property], in mpv [format] ([MpvFormat]), to the [EventObserver]s
+     * until [unobserveProperty] (mpv_observe_property). An mpv error is logged, not thrown.
+     */
     fun observeProperty(property: String, format: Int) {
         checkCreated()
         nativeObserveProperty(nativeInstance, property, format)
@@ -229,6 +264,27 @@ class MPVLib private constructor(nativePtr: Long) {
         dispatch(logObservers, "logMessage") { o -> o.logMessage(prefix, level, text) }
     }
 
+    // Called from JNI on mpv's event thread, for the functions in the other files. Unlike
+    // the callbacks above, mpv's replies to asynchronous calls (MPV_EVENT_*_REPLY) and the
+    // changes of property flows reach only these, never an EventObserver.
+
+    /** A change of a property flow's observation [id]. */
+    private fun onPropertyChange(id: Long, value: Any?) = runtime.onPropertyChange(id, value)
+
+    /** The reply to asynchronous request [id]. */
+    private fun onReply(id: Long, error: Int, result: ByteArray?) = runtime.onReply(id, error, result)
+
+    /** Every event that [event] or [eventEndFile] gets, with its data, after them. */
+    private fun onEvent(
+        eventId: Int,
+        entryId: Long,
+        reason: Int,
+        error: Int,
+        insertId: Long,
+        insertCount: Int,
+        args: Array<String>?,
+    ) = runtime.onEvent(eventId, entryId, reason, error, insertId, insertCount, args)
+
     // Calls every observer even if one of them throws, so a faulty observer
     // cannot stop delivery to the ones registered after it.
     private inline fun <T> dispatch(targets: Iterable<T>, callback: String, call: (T) -> Unit) {
@@ -242,7 +298,10 @@ class MPVLib private constructor(nativePtr: Long) {
     }
 
     interface EventObserver {
-        /** Every event except property changes and log messages, MPV_EVENT_END_FILE included. */
+        /**
+         * Every event except property changes and log messages, MPV_EVENT_END_FILE included
+         * (and except the replies to the suspend functions' requests, which only they get).
+         */
         fun event(eventId: Int) {}
         /**
          * MPV_EVENT_END_FILE with its [MpvEndFileReason] and, for MPV_END_FILE_REASON_ERROR,

@@ -11,27 +11,20 @@ android {
     namespace = "dev.jdtech.mpv"
     compileSdk = 37
     buildToolsVersion = "37.0.0"
-    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("proguard-rules.pro")
-        externalNativeBuild {
-            cmake {
-                arguments += listOf(
-                    "-DANDROID_STL=c++_shared",
-                )
-                cFlags += "-Werror"
-                cppFlags += "-std=c++11"
-            }
-        }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "4.1.2"
+    // Gradle builds no native code. The build scripts (buildscripts/scripts/player.sh) put
+    // every .so of every ABI, already stripped, into src/main/jniLibs/<abi>, and Gradle
+    // packages them byte for byte: no NDK is needed here, and the AAR does not depend on
+    // which NDK the machine running Gradle happens to have.
+    packaging {
+        jniLibs {
+            keepDebugSymbols += "**/*.so"
         }
     }
 
@@ -39,9 +32,20 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // The host unit tests (src/test) cover the Kotlin code that needs neither JNI nor mpv;
+    // android.util.Log, which it logs with, returns defaults there instead of throwing.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
+    // api: Flow and suspend functions are in the public API (MpvAsync.kt, MpvFlows.kt)
+    api(libs.kotlinx.coroutines.core)
+
+    testImplementation(libs.junit)
+
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
 }

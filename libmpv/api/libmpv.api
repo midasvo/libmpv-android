@@ -1,0 +1,422 @@
+public final class dev.jdtech.mpv.MPVLib {
+  public dev.jdtech.mpv.MPVLib(long, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int commandWithResult(java.lang.String[]);
+  public final int requestLogMessages(java.lang.String);
+  public final int setOptionString(java.lang.String, java.lang.String);
+  public final java.lang.Boolean getPropertyBoolean(java.lang.String);
+  public final java.lang.Double getPropertyDouble(java.lang.String);
+  public final java.lang.Integer getPropertyInt(java.lang.String);
+  public final java.lang.Long getPropertyLong(java.lang.String);
+  public final java.lang.String getPropertyString(java.lang.String);
+  public final void addLogObserver(dev.jdtech.mpv.MPVLib$LogObserver);
+  public final void addObserver(dev.jdtech.mpv.MPVLib$EventObserver);
+  public final void attachSurface(android.view.Surface);
+  public final void command(java.lang.String[]);
+  public final void destroy();
+  public final void detachSurface();
+  public final void event(int);
+  public final void eventEndFile(int, int);
+  public final void eventProperty(java.lang.String);
+  public final void eventProperty(java.lang.String, boolean);
+  public final void eventProperty(java.lang.String, double);
+  public final void eventProperty(java.lang.String, java.lang.String);
+  public final void eventProperty(java.lang.String, long);
+  public final void init();
+  public final void logMessage(java.lang.String, int, java.lang.String);
+  public final void observeProperty(java.lang.String, int);
+  public final void removeLogObserver(dev.jdtech.mpv.MPVLib$LogObserver);
+  public final void removeObserver(dev.jdtech.mpv.MPVLib$EventObserver);
+  public final void setPropertyBoolean(java.lang.String, boolean);
+  public final void setPropertyDouble(java.lang.String, double);
+  public final void setPropertyInt(java.lang.String, int);
+  public final void setPropertyString(java.lang.String, java.lang.String);
+  public static final dev.jdtech.mpv.MPVLib create(android.content.Context);
+  public static final dev.jdtech.mpv.MPVLib$Companion Companion;
+}
+
+public final class dev.jdtech.mpv.MPVLib$Companion {
+  public dev.jdtech.mpv.MPVLib$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+  public final dev.jdtech.mpv.MPVLib create(android.content.Context);
+}
+
+public interface dev.jdtech.mpv.MPVLib$EventObserver {
+  public default void event(int);
+  public default void eventEndFile(int, int);
+  public default void eventProperty(java.lang.String);
+  public default void eventProperty(java.lang.String, boolean);
+  public default void eventProperty(java.lang.String, double);
+  public default void eventProperty(java.lang.String, java.lang.String);
+  public default void eventProperty(java.lang.String, long);
+}
+
+public final class dev.jdtech.mpv.MPVLib$EventObserver$DefaultImpls {
+  public static void event(dev.jdtech.mpv.MPVLib$EventObserver, int);
+  public static void eventEndFile(dev.jdtech.mpv.MPVLib$EventObserver, int, int);
+  public static void eventProperty(dev.jdtech.mpv.MPVLib$EventObserver, java.lang.String);
+  public static void eventProperty(dev.jdtech.mpv.MPVLib$EventObserver, java.lang.String, boolean);
+  public static void eventProperty(dev.jdtech.mpv.MPVLib$EventObserver, java.lang.String, double);
+  public static void eventProperty(dev.jdtech.mpv.MPVLib$EventObserver, java.lang.String, java.lang.String);
+  public static void eventProperty(dev.jdtech.mpv.MPVLib$EventObserver, java.lang.String, long);
+}
+
+public interface dev.jdtech.mpv.MPVLib$LogObserver {
+  public default void logMessage(java.lang.String, int, java.lang.String);
+}
+
+public final class dev.jdtech.mpv.MPVLib$LogObserver$DefaultImpls {
+  public static void logMessage(dev.jdtech.mpv.MPVLib$LogObserver, java.lang.String, int, java.lang.String);
+}
+
+public final class dev.jdtech.mpv.MPVLib$MpvEndFileReason {
+  public static final dev.jdtech.mpv.MPVLib$MpvEndFileReason INSTANCE;
+  public static final int MPV_END_FILE_REASON_EOF = 0;
+  public static final int MPV_END_FILE_REASON_ERROR = 4;
+  public static final int MPV_END_FILE_REASON_QUIT = 3;
+  public static final int MPV_END_FILE_REASON_REDIRECT = 5;
+  public static final int MPV_END_FILE_REASON_STOP = 2;
+}
+
+public final class dev.jdtech.mpv.MPVLib$MpvError {
+  public static final dev.jdtech.mpv.MPVLib$MpvError INSTANCE;
+  public static final int MPV_ERROR_AO_INIT_FAILED = -14;
+  public static final int MPV_ERROR_COMMAND = -12;
+  public static final int MPV_ERROR_EVENT_QUEUE_FULL = -1;
+  public static final int MPV_ERROR_GENERIC = -20;
+  public static final int MPV_ERROR_INVALID_PARAMETER = -4;
+  public static final int MPV_ERROR_LOADING_FAILED = -13;
+  public static final int MPV_ERROR_NOMEM = -2;
+  public static final int MPV_ERROR_NOTHING_TO_PLAY = -16;
+  public static final int MPV_ERROR_NOT_IMPLEMENTED = -19;
+  public static final int MPV_ERROR_OPTION_ERROR = -7;
+  public static final int MPV_ERROR_OPTION_FORMAT = -6;
+  public static final int MPV_ERROR_OPTION_NOT_FOUND = -5;
+  public static final int MPV_ERROR_PROPERTY_ERROR = -11;
+  public static final int MPV_ERROR_PROPERTY_FORMAT = -9;
+  public static final int MPV_ERROR_PROPERTY_NOT_FOUND = -8;
+  public static final int MPV_ERROR_PROPERTY_UNAVAILABLE = -10;
+  public static final int MPV_ERROR_SUCCESS = 0;
+  public static final int MPV_ERROR_UNINITIALIZED = -3;
+  public static final int MPV_ERROR_UNKNOWN_FORMAT = -17;
+  public static final int MPV_ERROR_UNSUPPORTED = -18;
+  public static final int MPV_ERROR_VO_INIT_FAILED = -15;
+}
+
+public final class dev.jdtech.mpv.MPVLib$MpvEvent {
+  public static final dev.jdtech.mpv.MPVLib$MpvEvent INSTANCE;
+  public static final int MPV_EVENT_AUDIO_RECONFIG = 18;
+  public static final int MPV_EVENT_CLIENT_MESSAGE = 16;
+  public static final int MPV_EVENT_COMMAND_REPLY = 5;
+  public static final int MPV_EVENT_END_FILE = 7;
+  public static final int MPV_EVENT_FILE_LOADED = 8;
+  public static final int MPV_EVENT_GET_PROPERTY_REPLY = 3;
+  public static final int MPV_EVENT_HOOK = 25;
+  public static final int MPV_EVENT_IDLE = 11;
+  public static final int MPV_EVENT_LOG_MESSAGE = 2;
+  public static final int MPV_EVENT_NONE = 0;
+  public static final int MPV_EVENT_PLAYBACK_RESTART = 21;
+  public static final int MPV_EVENT_PROPERTY_CHANGE = 22;
+  public static final int MPV_EVENT_QUEUE_OVERFLOW = 24;
+  public static final int MPV_EVENT_SEEK = 20;
+  public static final int MPV_EVENT_SET_PROPERTY_REPLY = 4;
+  public static final int MPV_EVENT_SHUTDOWN = 1;
+  public static final int MPV_EVENT_START_FILE = 6;
+  public static final int MPV_EVENT_TICK = 14;
+  public static final int MPV_EVENT_VIDEO_RECONFIG = 17;
+}
+
+public final class dev.jdtech.mpv.MPVLib$MpvFormat {
+  public static final dev.jdtech.mpv.MPVLib$MpvFormat INSTANCE;
+  public static final int MPV_FORMAT_BYTE_ARRAY = 9;
+  public static final int MPV_FORMAT_DOUBLE = 5;
+  public static final int MPV_FORMAT_FLAG = 3;
+  public static final int MPV_FORMAT_INT64 = 4;
+  public static final int MPV_FORMAT_NODE = 6;
+  public static final int MPV_FORMAT_NODE_ARRAY = 7;
+  public static final int MPV_FORMAT_NODE_MAP = 8;
+  public static final int MPV_FORMAT_NONE = 0;
+  public static final int MPV_FORMAT_OSD_STRING = 2;
+  public static final int MPV_FORMAT_STRING = 1;
+}
+
+public final class dev.jdtech.mpv.MPVLib$MpvLogLevel {
+  public static final dev.jdtech.mpv.MPVLib$MpvLogLevel INSTANCE;
+  public static final int MPV_LOG_LEVEL_DEBUG = 60;
+  public static final int MPV_LOG_LEVEL_ERROR = 20;
+  public static final int MPV_LOG_LEVEL_FATAL = 10;
+  public static final int MPV_LOG_LEVEL_INFO = 40;
+  public static final int MPV_LOG_LEVEL_NONE = 0;
+  public static final int MPV_LOG_LEVEL_TRACE = 70;
+  public static final int MPV_LOG_LEVEL_V = 50;
+  public static final int MPV_LOG_LEVEL_WARN = 30;
+}
+
+public final class dev.jdtech.mpv.MpvAsync {
+  public static final java.lang.Object commandAsync(dev.jdtech.mpv.MPVLib, dev.jdtech.mpv.MpvNode, kotlin.coroutines.Continuation<? super dev.jdtech.mpv.MpvNode>);
+  public static final java.lang.Object getPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, kotlin.coroutines.Continuation<? super dev.jdtech.mpv.MpvNode>);
+  public static final java.lang.Object setPropertyAsync(dev.jdtech.mpv.MPVLib, java.lang.String, dev.jdtech.mpv.MpvNode, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+}
+
+public final class dev.jdtech.mpv.MpvException extends java.lang.RuntimeException {
+  public dev.jdtech.mpv.MpvException(int, java.lang.String);
+  public final int getError();
+}
+
+public final class dev.jdtech.mpv.MpvFlows {
+  public static final kotlinx.coroutines.flow.Flow<dev.jdtech.mpv.MpvNode> nodePropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
+  public static final kotlinx.coroutines.flow.Flow<dev.jdtech.mpv.MpvPlayerEvent> eventFlow(dev.jdtech.mpv.MPVLib);
+  public static final kotlinx.coroutines.flow.Flow<java.lang.Boolean> booleanPropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
+  public static final kotlinx.coroutines.flow.Flow<java.lang.Double> doublePropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
+  public static final kotlinx.coroutines.flow.Flow<java.lang.Long> longPropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
+  public static final kotlinx.coroutines.flow.Flow<java.lang.String> stringPropertyFlow(dev.jdtech.mpv.MPVLib, java.lang.String);
+}
+
+public abstract class dev.jdtech.mpv.MpvNode {
+  public dev.jdtech.mpv.MpvNode(kotlin.jvm.internal.DefaultConstructorMarker);
+  public final boolean isNone();
+  public final byte[] getBytes();
+  public final dev.jdtech.mpv.MpvNode get(int);
+  public final dev.jdtech.mpv.MpvNode get(java.lang.String);
+  public final java.lang.Boolean getBoolean();
+  public final java.lang.Double getDouble();
+  public final java.lang.Long getLong();
+  public final java.lang.String getString();
+  public final java.util.List<dev.jdtech.mpv.MpvNode> getList();
+  public final java.util.Map<java.lang.String, dev.jdtech.mpv.MpvNode> getMap();
+  public static final dev.jdtech.mpv.MpvNode command(java.lang.String, java.lang.Object...);
+  public static final dev.jdtech.mpv.MpvNode namedCommand(java.lang.String, java.util.Map<java.lang.String, ? extends java.lang.Object>);
+  public static final dev.jdtech.mpv.MpvNode of(java.lang.Object);
+  public static final dev.jdtech.mpv.MpvNode$Companion Companion;
+}
+
+public final class dev.jdtech.mpv.MpvNode$ArrayValue extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$ArrayValue(java.util.List<? extends dev.jdtech.mpv.MpvNode>);
+  public final dev.jdtech.mpv.MpvNode$ArrayValue copy(java.util.List<? extends dev.jdtech.mpv.MpvNode>);
+  public final java.util.List<dev.jdtech.mpv.MpvNode> component1();
+  public final java.util.List<dev.jdtech.mpv.MpvNode> getValues();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvNode$ArrayValue copy$default(dev.jdtech.mpv.MpvNode$ArrayValue, java.util.List, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNode$ByteArrayValue extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$ByteArrayValue(byte[]);
+  public final byte[] toByteArray();
+  public final int getSize();
+  public int hashCode();
+  public java.lang.String toString();
+}
+
+public final class dev.jdtech.mpv.MpvNode$Companion {
+  public dev.jdtech.mpv.MpvNode$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+  public final dev.jdtech.mpv.MpvNode command(java.lang.String, java.lang.Object...);
+  public final dev.jdtech.mpv.MpvNode namedCommand(java.lang.String, java.util.Map<java.lang.String, ? extends java.lang.Object>);
+  public final dev.jdtech.mpv.MpvNode of(java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNode$DoubleValue extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$DoubleValue(double);
+  public final dev.jdtech.mpv.MpvNode$DoubleValue copy(double);
+  public final double component1();
+  public final double getValue();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvNode$DoubleValue copy$default(dev.jdtech.mpv.MpvNode$DoubleValue, double, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNode$FlagValue extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$FlagValue(boolean);
+  public final boolean component1();
+  public final boolean getValue();
+  public final dev.jdtech.mpv.MpvNode$FlagValue copy(boolean);
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvNode$FlagValue copy$default(dev.jdtech.mpv.MpvNode$FlagValue, boolean, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNode$Int64Value extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$Int64Value(long);
+  public final dev.jdtech.mpv.MpvNode$Int64Value copy(long);
+  public final long component1();
+  public final long getValue();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvNode$Int64Value copy$default(dev.jdtech.mpv.MpvNode$Int64Value, long, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNode$MapValue extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$MapValue(java.util.Map<java.lang.String, ? extends dev.jdtech.mpv.MpvNode>);
+  public final dev.jdtech.mpv.MpvNode$MapValue copy(java.util.Map<java.lang.String, ? extends dev.jdtech.mpv.MpvNode>);
+  public final java.util.Map<java.lang.String, dev.jdtech.mpv.MpvNode> component1();
+  public final java.util.Map<java.lang.String, dev.jdtech.mpv.MpvNode> getEntries();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvNode$MapValue copy$default(dev.jdtech.mpv.MpvNode$MapValue, java.util.Map, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNode$None extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvNode$None INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvNode$StringValue extends dev.jdtech.mpv.MpvNode {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvNode$StringValue(java.lang.String);
+  public final dev.jdtech.mpv.MpvNode$StringValue copy(java.lang.String);
+  public final java.lang.String component1();
+  public final java.lang.String getValue();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvNode$StringValue copy$default(dev.jdtech.mpv.MpvNode$StringValue, java.lang.String, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvNodes {
+  public static final dev.jdtech.mpv.MpvNode commandNode(dev.jdtech.mpv.MPVLib, dev.jdtech.mpv.MpvNode);
+  public static final dev.jdtech.mpv.MpvNode getPropertyNode(dev.jdtech.mpv.MPVLib, java.lang.String);
+  public static final int unobserveProperty(dev.jdtech.mpv.MPVLib, java.lang.String);
+  public static final void setPropertyNode(dev.jdtech.mpv.MPVLib, java.lang.String, dev.jdtech.mpv.MpvNode);
+}
+
+public interface dev.jdtech.mpv.MpvPlayerEvent {
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$AudioReconfig implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$AudioReconfig INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$ClientMessage implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvPlayerEvent$ClientMessage(java.util.List<java.lang.String>);
+  public final dev.jdtech.mpv.MpvPlayerEvent$ClientMessage copy(java.util.List<java.lang.String>);
+  public final java.util.List<java.lang.String> component1();
+  public final java.util.List<java.lang.String> getArgs();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvPlayerEvent$ClientMessage copy$default(dev.jdtech.mpv.MpvPlayerEvent$ClientMessage, java.util.List, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$Dropped implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvPlayerEvent$Dropped(int);
+  public final dev.jdtech.mpv.MpvPlayerEvent$Dropped copy(int);
+  public final int component1();
+  public final int getCount();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvPlayerEvent$Dropped copy$default(dev.jdtech.mpv.MpvPlayerEvent$Dropped, int, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$EndFile implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvPlayerEvent$EndFile(int, int, long, long, int);
+  public final dev.jdtech.mpv.MpvPlayerEvent$EndFile copy(int, int, long, long, int);
+  public final int component1();
+  public final int component2();
+  public final int component5();
+  public final int getError();
+  public final int getPlaylistInsertNumEntries();
+  public final int getReason();
+  public final long component3();
+  public final long component4();
+  public final long getPlaylistEntryId();
+  public final long getPlaylistInsertId();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvPlayerEvent$EndFile copy$default(dev.jdtech.mpv.MpvPlayerEvent$EndFile, int, int, long, long, int, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$FileLoaded implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$FileLoaded INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$Other implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvPlayerEvent$Other(int);
+  public final dev.jdtech.mpv.MpvPlayerEvent$Other copy(int);
+  public final int component1();
+  public final int getEventId();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvPlayerEvent$Other copy$default(dev.jdtech.mpv.MpvPlayerEvent$Other, int, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$PlaybackRestart implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$PlaybackRestart INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$QueueOverflow implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$QueueOverflow INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$Seek implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$Seek INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$Shutdown implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$Shutdown INSTANCE;
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$StartFile implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public dev.jdtech.mpv.MpvPlayerEvent$StartFile(long);
+  public final dev.jdtech.mpv.MpvPlayerEvent$StartFile copy(long);
+  public final long component1();
+  public final long getPlaylistEntryId();
+  public int hashCode();
+  public java.lang.String toString();
+  public static dev.jdtech.mpv.MpvPlayerEvent$StartFile copy$default(dev.jdtech.mpv.MpvPlayerEvent$StartFile, long, int, java.lang.Object);
+}
+
+public final class dev.jdtech.mpv.MpvPlayerEvent$VideoReconfig implements dev.jdtech.mpv.MpvPlayerEvent {
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public static final dev.jdtech.mpv.MpvPlayerEvent$VideoReconfig INSTANCE;
+}
+
+public interface dev.jdtech.mpv.MpvStream {
+  public abstract int read(byte[], int, int);
+  public abstract void close();
+  public default long seek(long);
+  public default long size();
+  public default void cancel();
+}
+
+public final class dev.jdtech.mpv.MpvStream$DefaultImpls {
+  public static long seek(dev.jdtech.mpv.MpvStream, long);
+  public static long size(dev.jdtech.mpv.MpvStream);
+  public static void cancel(dev.jdtech.mpv.MpvStream);
+}
+
+public interface dev.jdtech.mpv.MpvStreamProvider {
+  public abstract dev.jdtech.mpv.MpvStream open(java.lang.String);
+}
+
+public final class dev.jdtech.mpv.MpvStreams {
+  public static final void registerStreamProtocol(dev.jdtech.mpv.MPVLib, java.lang.String, dev.jdtech.mpv.MpvStreamProvider);
+}

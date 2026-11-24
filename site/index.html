@@ -23,7 +23,7 @@
     "description": "mpv, FFmpeg and libplacebo built for Android and published to Maven Central as io.github.midasvo:libmpv.",
     "url": "https://midasvo.nl/libmpv-android/",
     "codeRepository": "https://github.com/midasvo/libmpv-android",
-    "programmingLanguage": ["Kotlin", "C++"],
+    "programmingLanguage": ["Kotlin", "Rust"],
     "runtimePlatform": "Android 8.0 or newer",
     "license": "https://opensource.org/license/mit",
     "author": { "@type": "Person", "name": "Midas van Oene", "url": "https://midasvo.nl/" },
@@ -31,6 +31,9 @@
   }
   </script>
   <link rel="stylesheet" href="style.css">
+  <!-- Generated at deploy time by buildscripts/site-data.sh (pages.yaml); not committed.
+       Without it the page shows links where the versions would be. -->
+  <script src="data.js"></script>
 </head>
 <body>
 
@@ -40,6 +43,7 @@
     <nav aria-label="Sections">
       <a href="#use">Use it</a>
       <a class="optional" href="#inside">Inside</a>
+      <a class="optional" href="#next">Next</a>
       <a class="optional" href="#why">Why</a>
       <a class="optional" href="#licence">Licence</a>
       <a href="https://github.com/midasvo/libmpv-android">GitHub</a>
@@ -63,12 +67,13 @@
           </a>
           <a class="btn btn-secondary" href="https://github.com/midasvo/libmpv-android">Source on GitHub</a>
         </div>
-        <p class="meta">Latest: 1.3.0, with mpv 0.42.0 and FFmpeg 9.1. GPL-3.0-or-later. Android 8.0 or newer.</p>
+        <p class="meta" data-with-data hidden>Latest release: <span data-v="release"></span>, with mpv <span data-v="release-mpv"></span> and FFmpeg <span data-v="release-ffmpeg"></span>. GPL-3.0-or-later. Android 8.0 or newer.</p>
+        <p class="meta" data-without-data>Latest release: see <a href="https://github.com/midasvo/libmpv-android/releases">Releases</a>. GPL-3.0-or-later. Android 8.0 or newer.</p>
       </div>
       <div class="panel" aria-label="Example">
         <p class="label">build.gradle.kts</p>
 <pre><code><span class="k">dependencies</span> {
-    implementation(<span class="s">"io.github.midasvo:libmpv:1.3.0"</span>)
+    implementation(<span class="s">"io.github.midasvo:libmpv:<span data-v="release">&lt;version&gt;</span>"</span>)
 }</code></pre>
         <p class="label">Kotlin</p>
 <pre><code><span class="k">import</span> dev.jdtech.mpv.MPVLib
@@ -102,9 +107,9 @@ mpv.destroy()</code></pre>
           <h3>New project</h3>
 <pre><code><span class="c">// settings.gradle.kts: mavenCentral() is usually there already</span>
 <span class="k">dependencies</span> {
-    implementation(<span class="s">"io.github.midasvo:libmpv:1.3.0"</span>)
+    implementation(<span class="s">"io.github.midasvo:libmpv:<span data-v="release">&lt;version&gt;</span>"</span>)
 }</code></pre>
-          <p>The wrapper creates an mpv instance, attaches it to a <code>Surface</code>, sets options and properties, sends commands, and passes mpv's events and log messages to your observers. Everything else is mpv itself: its <a href="https://mpv.io/manual/stable/">manual</a> is the reference for options, properties and commands.</p>
+          <p>The wrapper creates an mpv instance, attaches it to a <code>Surface</code>, sets options and properties, sends commands, and passes mpv's events and log messages to your observers. Callbacks arrive on mpv's event thread. Everything else is mpv itself: its <a href="https://mpv.io/manual/stable/">manual</a> is the reference for options, properties and commands.</p>
         </div>
         <div class="card">
           <h3>Coming from <code>dev.jdtech.mpv:libmpv</code></h3>
@@ -116,6 +121,43 @@ mpv.destroy()</code></pre>
           </ul>
         </div>
       </div>
+
+      <!-- On main, not in a release: when it is released, drop "on main" from the heading and the
+           first sentence (RELEASING.md, step 8). -->
+      <div class="section-head subhead reveal" id="api">
+        <h3>More of mpv's API, on <code>main</code></h3>
+        <p>In the next release, not in 1.3.0. Extension functions on <code>MPVLib</code>, in the same package: nothing above changes, and observers get what they got before. The new functions throw <code>MpvException</code> with mpv's error code. The library then brings <code>kotlinx-coroutines-core</code> with it.</p>
+      </div>
+
+      <div class="cards reveal">
+        <div class="card">
+          <h3>Structured values</h3>
+<pre><code><span class="k">val</span> tracks = mpv.getPropertyNode(<span class="s">"track-list"</span>)
+<span class="k">val</span> audio = tracks.list.orEmpty()
+    .filter { it[<span class="s">"type"</span>]?.string == <span class="s">"audio"</span> }
+<span class="k">val</span> id = audio.firstOrNull()?.get(<span class="s">"id"</span>)?.long</code></pre>
+          <p><code>MpvNode</code> is mpv's <code>mpv_node</code>: maps, arrays and typed values instead of JSON text. <code>getPropertyNode</code>, <code>setPropertyNode</code> and <code>commandNode</code>, which returns a command's result.</p>
+        </div>
+        <div class="card">
+          <h3>Suspend functions</h3>
+<pre><code>scope.launch {
+    <span class="k">val</span> paused = MpvNode.of(<span class="k">true</span>)
+    mpv.setPropertyAsync(<span class="s">"pause"</span>, paused)
+}</code></pre>
+          <p><code>commandAsync</code>, <code>getPropertyAsync</code> and <code>setPropertyAsync</code> use mpv's own async API, so they never block the calling thread and are safe on the main thread. They can be cancelled, and fail if the instance is destroyed while they wait.</p>
+        </div>
+        <div class="card">
+          <h3>Flows</h3>
+<pre><code>mpv.doublePropertyFlow(<span class="s">"time-pos"</span>)
+    .collect { showPosition(it) }</code></pre>
+          <p>A flow per property type, and <code>eventFlow()</code> with each event's data. Observing starts and stops with the collection. Property flows keep the latest value; the event flow buffers 256 events per collector, then reports how many it dropped.</p>
+        </div>
+        <div class="card">
+          <h3>Custom protocols</h3>
+          <p><code>registerStreamProtocol("app") { uri -&gt; ... }</code> makes mpv read <code>app://</code> URIs through your Kotlin code: your own HTTP client, a <code>ContentResolver</code>, data in memory. You implement <code>read</code> and <code>close</code>, and <code>seek</code> and <code>size</code> where you can.</p>
+          <p>The <a href="https://github.com/midasvo/libmpv-android#more-of-mpvs-api-on-main-not-in-130">README</a> has an example of each and says when to prefer them over the classic calls.</p>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -123,33 +165,56 @@ mpv.destroy()</code></pre>
     <div class="wrap">
       <div class="split">
         <div class="section-head reveal">
-          <h2 id="inside-title">What's inside 1.3.0</h2>
-          <p><code>libmpv.so</code> and the FFmpeg libraries are shared libraries. Everything else is statically linked into them.</p>
-          <p>Each release's notes list the exact versions, and every version lives in one file, <a href="https://github.com/midasvo/libmpv-android/blob/main/buildscripts/include/depinfo.sh"><code>depinfo.sh</code></a>. Built with NDK 30 against Android API 37, minimum API 26.</p>
-          <p class="meta">New in 1.3.0: FFmpeg 9.1, dav1d 1.5.5, mbedtls 3.6.8, harfbuzz 15.2.0 and fontconfig 2.18.4. Observers get <code>eventEndFile(reason, error)</code> with mpv's end-file reason and error code, and <code>MPV_EVENT_END_FILE</code> still reaches <code>event()</code> as before. Every observer callback now has an empty default, so you override only the ones you use.</p>
+          <h2 id="inside-title">What's inside</h2>
+          <p>For each ABI: <code>libmpv.so</code> and the FFmpeg libraries as shared libraries, with everything else statically linked into them, the wrapper <code>libplayer.so</code>, and the NDK's <code>libc++_shared.so</code>. Minimum API 26.</p>
+          <p>Every version is set in one file, <a href="https://github.com/midasvo/libmpv-android/blob/main/buildscripts/include/depinfo.sh"><code>depinfo.sh</code></a>, and each release's notes list the versions it was built with. <span data-with-data hidden>This table is generated from those files when the page is deployed, at commit <a data-v="commit-link"><code data-v="commit"></code></a>. Built with NDK <span data-v="ndk"></span>.</span></p>
+          <p class="meta" data-with-data data-v="others" hidden></p>
         </div>
         <div class="table-scroll reveal">
-          <table>
-            <thead><tr><th scope="col">Library</th><th scope="col">Version</th><th scope="col">Licence</th></tr></thead>
-            <tbody>
-              <tr><th scope="row">mpv</th><td class="v">0.42.0</td><td>GPL-2.0-or-later</td></tr>
-              <tr><th scope="row">FFmpeg</th><td class="v">9.1</td><td>GPL-3.0-or-later</td></tr>
-              <tr><th scope="row">libplacebo</th><td class="v">7.387.0</td><td>LGPL-2.1-or-later</td></tr>
-              <tr><th scope="row">dav1d</th><td class="v">1.5.5</td><td>BSD-2-Clause</td></tr>
-              <tr><th scope="row">libass</th><td class="v">0.17.5</td><td>ISC</td></tr>
-              <tr><th scope="row">curl</th><td class="v">8.23.0</td><td>curl</td></tr>
-              <tr><th scope="row">mbedtls</th><td class="v">3.6.8</td><td>Apache-2.0</td></tr>
-              <tr><th scope="row">harfbuzz</th><td class="v">15.2.0</td><td>Old MIT</td></tr>
-              <tr><th scope="row">freetype</th><td class="v">2.15.0</td><td>FTL or GPL-2.0-or-later</td></tr>
-              <tr><th scope="row">fontconfig</th><td class="v">2.18.4</td><td>fontconfig</td></tr>
-              <tr><th scope="row">fribidi</th><td class="v">1.0.18</td><td>LGPL-2.1-or-later</td></tr>
-              <tr><th scope="row">libunibreak</th><td class="v">8.0</td><td>Zlib</td></tr>
-              <tr><th scope="row">libxml2</th><td class="v">2.15.4</td><td>MIT</td></tr>
-              <tr><th scope="row">lua</th><td class="v">5.2.4</td><td>MIT</td></tr>
-            </tbody>
+          <table data-with-data hidden>
+            <thead><tr><th scope="col">Library</th><th scope="col">Release <span data-v="release"></span></th><th scope="col"><code>main</code></th><th scope="col">Licence</th></tr></thead>
+            <tbody data-v="components"></tbody>
           </table>
+          <p class="meta" data-with-data hidden>A version on <code>main</code> in colour differs from the release and will be in the next one. <span class="patched-key">+ patch</span>: the sources are patched (<a href="https://github.com/midasvo/libmpv-android/tree/main/buildscripts/patches"><code>buildscripts/patches</code></a>).</p>
+          <div class="card" data-without-data>
+            <p>The component table is generated when the page is deployed. Until then: the versions on <code>main</code> are in <a href="https://github.com/midasvo/libmpv-android/blob/main/buildscripts/include/depinfo.sh"><code>depinfo.sh</code></a>, those of a release in its <a href="https://github.com/midasvo/libmpv-android/releases">release notes</a>, and the licences in the <a href="https://github.com/midasvo/libmpv-android#licensing">README</a>.</p>
+          </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="next" aria-labelledby="next-title">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2 id="next-title">Released, and next</h2>
+        <p>The page is built from <code>main</code>, which is ahead of the latest release. This is what each has.</p>
+      </div>
+
+      <!-- release-text: written by hand for the release in data-written-for. Update both cards and
+           that attribute with each release (RELEASING.md, step 8). While data.js names a newer
+           release, site.js hides the cards and shows the paragraph after them instead. -->
+      <div class="cards reveal" data-written-for="1.3.0">
+        <div class="card">
+          <h3>In 1.3.0, the latest release</h3>
+          <p>The C++ JNI wrapper inherited from upstream, built by the old single-job pipeline. The AAR is signed, and the release attaches its corresponding source.</p>
+          <ul>
+            <li><code>eventEndFile(reason, error)</code> with mpv's end-file reason and error code. <code>MPV_EVENT_END_FILE</code> still reaches <code>event()</code> as before.</li>
+            <li>Every observer callback has an empty default, so you override only the ones you use.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>On <code>main</code>, in the next release</h3>
+          <ul>
+            <li><strong>A JNI wrapper in Rust.</strong> Same Kotlin API. A call after <code>destroy()</code> throws <code>IllegalStateException</code> instead of touching freed memory, a call racing <code>destroy()</code> is safe, and a second <code>destroy()</code> does nothing.</li>
+            <li><code>destroy()</code> from a callback throws (call it from another thread), and a <code>null</code> string argument throws <code>NullPointerException</code>.</li>
+            <li><strong>More of mpv's API</strong> (<a href="#api">above</a>): structured values, suspend functions, flows, custom protocols and <code>unobserveProperty</code>. All additive.</li>
+            <li>An mpv patch that rounds the AudioTrack buffer to whole frames, so 22,050 Hz audio is no longer silent.</li>
+            <li>A new build pipeline. Releases built by it come with an SBOM and a provenance attestation.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="meta" data-text-stale hidden><span data-v="release"></span> has been released since this section was written. Its <a data-v="release-link" href="https://github.com/midasvo/libmpv-android/releases">release notes</a> say what is in it.</p>
     </div>
   </section>
 
@@ -157,21 +222,21 @@ mpv.destroy()</code></pre>
     <div class="wrap">
       <div class="section-head reveal">
         <h2 id="why-title">Why a fork</h2>
-        <p>This is a fork of <a href="https://github.com/jarnedemeulemeester/libmpv-android">jarnedemeulemeester/libmpv-android</a>, the library Findroid uses. Upstream had already merged mpv 0.42 and FFmpeg 9, but there was no release with them yet, and Ephyra needed the libplacebo fix for AV1 film grain. So this fork publishes its own releases. It follows upstream rather than competing with it.</p>
+        <p>This is a fork of <a href="https://github.com/jarnedemeulemeester/libmpv-android">jarnedemeulemeester/libmpv-android</a>, the library Findroid uses. Upstream had already merged mpv 0.42 and FFmpeg 9, but there was no release with them yet, and Ephyra needed the libplacebo fix for AV1 film grain. So this fork publishes its own releases. It has since grown its own wrapper and build pipeline, and still takes upstream's changes.</p>
       </div>
 
       <div class="cards three reveal">
         <div class="card">
-          <h3>Close to upstream</h3>
-          <p>A weekly workflow opens a pull request that merges upstream's <code>main</code>. The fork's own changes are a short list of files, so those merges stay trivial.</p>
+          <h3>Follows upstream</h3>
+          <p>A weekly workflow opens a pull request that merges upstream's <code>main</code>. Where the fork has its own version of a file, such as the wrapper, the change is ported by hand.</p>
         </div>
         <div class="card">
           <h3>Current</h3>
           <p>Renovate proposes every new version of mpv, FFmpeg and the rest. CI builds all four ABIs on each one before it can be merged.</p>
         </div>
         <div class="card">
-          <h3>Tested in a real player</h3>
-          <p>A release goes into Ephyra before anything else. 1.1.0 was played on a phone, on emulators and on a 32-bit Android TV box, including hardware-decoded 10-bit AV1.</p>
+          <h3>Tested</h3>
+          <p>CI plays a real file on an emulator and checks which decoders, demuxers and protocols the build contains. A release goes into Ephyra before anything else: 1.1.0 was played on a phone, on emulators and on a 32-bit Android TV box, including hardware-decoded 10-bit AV1.</p>
         </div>
       </div>
     </div>
@@ -187,12 +252,23 @@ mpv.destroy()</code></pre>
       <div class="cards reveal">
         <div class="card">
           <h3>Source with every release</h3>
-          <p>Each <a href="https://github.com/midasvo/libmpv-android/releases">release</a> attaches <code>libmpv-&lt;version&gt;-sources.tar.xz</code>: the repository at the tag plus every dependency as downloaded and patched. Link to it from your app and that part is covered.</p>
+          <p>Each <a href="https://github.com/midasvo/libmpv-android/releases">release</a> attaches <code>libmpv-&lt;version&gt;-sources.tar.xz</code>: the repository at the tag plus every dependency as downloaded and patched. Releases after 1.3.0 also hold the wrapper's Rust crates. Link to it from your app and that part is covered.</p>
         </div>
         <div class="card">
-          <h3>Signed and reproducible</h3>
-          <p>Releases are signed with a dedicated key that's published on keys.openpgp.org and keyserver.ubuntu.com. The build leaves the date out of <code>libmpv.so</code>, so two builds of the same tag can be compared byte for byte.</p>
+          <h3>Signed and checked</h3>
+          <p>Releases are signed with a dedicated key, <code>DD02 C554 A0EB AF24 B72B 68B0 D84A 55E8 003C 6AB5</code>, published on keys.openpgp.org and keyserver.ubuntu.com. The AAR on a release is the file on Maven Central. The build leaves the date out of <code>libmpv.so</code>, and CI bundles the AAR twice in separate jobs and fails unless the two are identical.</p>
         </div>
+      </div>
+
+      <div class="card verify reveal">
+        <h3>Verify a release</h3>
+<pre><code><span class="c"># the signature (every release)</span>
+gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys DD02C554A0EBAF24B72B68B0D84A55E8003C6AB5
+gpg --verify libmpv-&lt;version&gt;.aar.asc libmpv-&lt;version&gt;.aar
+
+<span class="c"># where it was built (releases after 1.3.0)</span>
+gh attestation verify libmpv-&lt;version&gt;.aar -R midasvo/libmpv-android</code></pre>
+        <p>The attestation shows that the file was built by this repository's release workflow, from which commit and tag. Releases after 1.3.0 also attach an SBOM, <code>libmpv-&lt;version&gt;.cdx.json</code>, with every component's version, licence, source and patches. <a href="https://github.com/midasvo/libmpv-android/blob/main/RELEASING.md#verifying-a-release">More in RELEASING.md</a>.</p>
       </div>
     </div>
   </section>

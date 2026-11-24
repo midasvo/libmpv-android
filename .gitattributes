@@ -1,0 +1,5 @@
+# Compared byte for byte by buildscripts/check-api.sh, and run under Git Bash on Windows
+libmpv/api/*.api text eol=lf
+*.sh text eol=lf
+# git apply needs the patch exactly as written
+*.patch -text
