@@ -183,6 +183,102 @@ impl Env {
         jni!(self, CallVoidMethodA, obj, method.0, args.as_ptr());
     }
 
+    /// Calls an `int` method; `Err` if it threw (the exception stays pending).
+    pub fn call_int(&self, obj: jobject, method: MethodId, args: &[jvalue]) -> Result<jint> {
+        let r = jni!(self, CallIntMethodA, obj, method.0, args.as_ptr());
+        self.check(r, false)
+    }
+
+    /// Calls a `long` method; `Err` if it threw (the exception stays pending).
+    pub fn call_long(&self, obj: jobject, method: MethodId, args: &[jvalue]) -> Result<jlong> {
+        let r = jni!(self, CallLongMethodA, obj, method.0, args.as_ptr());
+        self.check(r, false)
+    }
+
+    /// Calls a method returning an object (`None` for null); `Err` if it threw.
+    pub fn call_object(
+        &self,
+        obj: jobject,
+        method: MethodId,
+        args: &[jvalue],
+    ) -> Result<Option<Local<'_>>> {
+        let r = jni!(self, CallObjectMethodA, obj, method.0, args.as_ptr());
+        let r = self.local(r);
+        self.check(r, false)
+    }
+
+    pub fn new_object(&self, cls: &Global, ctor: MethodId, args: &[jvalue]) -> Result<Local<'_>> {
+        let r = jni!(self, NewObjectA, cls.raw, ctor.0, args.as_ptr());
+        let r = self.local(r);
+        self.check((), r.is_none())?;
+        r.ok_or(Pending)
+    }
+
+    /// Throws `throwable`. Always ends with an exception pending.
+    pub fn throw_object(&self, throwable: &Local<'_>) -> Pending {
+        jni!(self, Throw, throwable.raw);
+        Pending
+    }
+
+    /// A new `byte[]` with a copy of `bytes`.
+    pub fn new_byte_array(&self, bytes: &[u8]) -> Result<Local<'_>> {
+        let len = jsize::try_from(bytes.len())
+            .map_err(|_| self.throw(c"java/lang/OutOfMemoryError", "array too large for Java"))?;
+        let array = jni!(self, NewByteArray, len);
+        let array = self.local(array);
+        self.check((), array.is_none())?;
+        let array = array.ok_or(Pending)?;
+        if len > 0 {
+            jni!(
+                self,
+                SetByteArrayRegion,
+                array.raw,
+                0,
+                len,
+                bytes.as_ptr().cast::<jbyte>()
+            );
+            self.check((), false)?;
+        }
+        Ok(array)
+    }
+
+    /// A copy of a `byte[]`'s contents. A null `array` throws
+    /// `NullPointerException`.
+    pub fn byte_array(&self, array: jbyteArray) -> Result<Vec<u8>> {
+        if array.is_null() {
+            return Err(self.throw(c"java/lang/NullPointerException", "array argument is null"));
+        }
+        let len = self.array_length(array)?;
+        let mut bytes = vec![0u8; usize::try_from(len).unwrap_or(0)];
+        if len > 0 {
+            self.byte_array_region(array, len, bytes.as_mut_ptr())?;
+        }
+        Ok(bytes)
+    }
+
+    /// Copies the first `len` bytes of `array` to `out`, which must have room
+    /// for them.
+    pub fn byte_array_region(&self, array: jbyteArray, len: jsize, out: *mut u8) -> Result<()> {
+        jni!(self, GetByteArrayRegion, array, 0, len, out.cast::<jbyte>());
+        self.check((), false)
+    }
+
+    /// A `String[]` with `strings` (an element of class `string_class`).
+    pub fn new_string_array(&self, string_class: &Global, strings: &[&CStr]) -> Result<Local<'_>> {
+        let len = jsize::try_from(strings.len())
+            .map_err(|_| self.throw(c"java/lang/OutOfMemoryError", "array too large for Java"))?;
+        let array = jni!(self, NewObjectArray, len, string_class.raw, ptr::null_mut());
+        let array = self.local(array);
+        self.check((), array.is_none())?;
+        let array = array.ok_or(Pending)?;
+        for (i, s) in strings.iter().enumerate() {
+            let s = self.new_string(s)?;
+            jni!(self, SetObjectArrayElement, array.raw, i as jsize, s.raw);
+            self.check((), false)?;
+        }
+        Ok(array)
+    }
+
     pub fn call_static_object(
         &self,
         cls: &Global,
@@ -290,6 +386,26 @@ impl Vm {
         (r == JNI_OK && !env.is_null()).then(|| unsafe { Env::from_raw(env.cast()) })
     }
 
+    /// Runs `f` with an env for the current thread, attaching the thread if
+    /// it is not attached and keeping it attached until the thread ends, so a
+    /// thread that calls in many times (mpv's stream threads) is attached once.
+    /// A thread attached here is detached by a thread-local destructor when it
+    /// exits, as the JNI documentation recommends. `None` if attaching fails.
+    pub fn with_thread_env<R>(self, f: impl FnOnce(&Env) -> R) -> Option<R> {
+        if let Some(env) = self.current_env() {
+            return Some(f(&env));
+        }
+        THREAD_ATTACHMENT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = self.attach_current_thread();
+            }
+            // f cannot reach this slot again: the thread is attached now, so a
+            // nested call takes the current_env path above
+            slot.as_ref().map(|attached| f(attached.env()))
+        })
+    }
+
     /// Runs `f` with an env for the current thread, attaching it for the
     /// duration if it is not attached. Does nothing if attaching fails.
     pub fn with_env(self, f: impl FnOnce(&Env)) {
@@ -313,6 +429,13 @@ impl Vm {
             env: unsafe { Env::from_raw(env.cast()) },
         })
     }
+}
+
+thread_local! {
+    /// The attachment made by `Vm::with_thread_env`; dropped (and the thread
+    /// detached) when the thread exits.
+    static THREAD_ATTACHMENT: std::cell::RefCell<Option<Attached>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The current thread attached to the VM; detached when dropped.

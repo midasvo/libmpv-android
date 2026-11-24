@@ -1,4 +1,5 @@
-//! The `native*` methods of `dev.jdtech.mpv.MPVLib`.
+//! The `native*` methods of `dev.jdtech.mpv.MPVLib` (the newer API's, those of
+//! `dev.jdtech.mpv.internal.Native`, are in `api`).
 //!
 //! Every function runs its body through `entry`, which turns a panic into a
 //! `RuntimeException` instead of letting it unwind into the JVM, and a
@@ -32,7 +33,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> &str {
     }
 }
 
-fn entry<R>(raw: *mut JNIEnv, on_error: R, body: impl FnOnce(&Env) -> Result<R>) -> R {
+pub fn entry<R>(raw: *mut JNIEnv, on_error: R, body: impl FnOnce(&Env) -> Result<R>) -> R {
     // SAFETY: the VM passes the calling thread's env to every native method
     let env = unsafe { Env::from_raw(raw) };
     match panic::catch_unwind(AssertUnwindSafe(|| body(&env))) {
@@ -41,6 +42,12 @@ fn entry<R>(raw: *mut JNIEnv, on_error: R, body: impl FnOnce(&Env) -> Result<R>)
         Ok(Err(Failure::Throw(class, message))) => {
             if !env.exception_pending() {
                 env.throw(class, &message);
+            }
+            on_error
+        }
+        Ok(Err(Failure::Mpv { error, operation })) => {
+            if !env.exception_pending() {
+                instance::throw_mpv(&env, error, &operation);
             }
             on_error
         }
@@ -55,7 +62,7 @@ fn entry<R>(raw: *mut JNIEnv, on_error: R, body: impl FnOnce(&Env) -> Result<R>)
     }
 }
 
-fn instance(handle: jlong) -> Result<std::sync::Arc<Instance>> {
+pub fn instance(handle: jlong) -> Result<std::sync::Arc<Instance>> {
     instance::lookup(handle).ok_or_else(Failure::destroyed)
 }
 
@@ -429,17 +436,7 @@ pub extern "system" fn Java_dev_jdtech_mpv_MPVLib_nativeObserveProperty(
 ) {
     entry(env, (), |env| {
         let instance = instance(handle)?;
-        let active = instance.enter()?;
         let name = env.c_string(property)?;
-        // SAFETY: an admitted call and a NUL-terminated name
-        let r = unsafe { mpv_observe_property(active.mpv(), 0, name.as_ptr(), format) };
-        if r < 0 {
-            log::error(&format!(
-                "mpv_observe_property({}) format {format} returned error {}",
-                name.to_string_lossy(),
-                error_string(r)
-            ));
-        }
-        Ok(())
+        instance.observe_legacy(&name, format)
     })
 }

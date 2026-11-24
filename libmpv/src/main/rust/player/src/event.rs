@@ -2,6 +2,7 @@
 //! the logcat side of log messages.
 
 use std::ffi::{CStr, c_char, c_int};
+use std::fmt;
 
 use crate::ffi::*;
 
@@ -14,13 +15,49 @@ pub enum Event<'a> {
         text: &'a CStr,
         log_level: c_int,
     },
-    /// `MPVLib.eventProperty(name[, value])`
-    Property { name: &'a CStr, value: Value<'a> },
+    /// A change of an observed property. `userdata` says whose observation it
+    /// is: 0 or negative for `MPVLib.observeProperty` (delivered to
+    /// `eventProperty(name[, value])`), positive for a property flow.
+    Property {
+        userdata: u64,
+        name: &'a CStr,
+        value: Value<'a>,
+    },
+    /// `MPVLib.event(MPV_EVENT_START_FILE)`; the id goes to the event flow
+    StartFile {
+        playlist_entry_id: i64,
+    },
     /// `MPVLib.eventEndFile(reason, error)`; Kotlin also delivers
     /// `event(MPV_EVENT_END_FILE)` from there
-    EndFile { reason: c_int, error: c_int },
+    EndFile(EndFile),
+    /// `MPVLib.event(MPV_EVENT_CLIENT_MESSAGE)`; the arguments go to the event flow
+    ClientMessage(Vec<&'a CStr>),
+    /// replies to the asynchronous calls, only for the requests' owner
+    GetPropertyReply {
+        userdata: u64,
+        error: c_int,
+        value: Value<'a>,
+    },
+    SetPropertyReply {
+        userdata: u64,
+        error: c_int,
+    },
+    CommandReply {
+        userdata: u64,
+        error: c_int,
+        result: Option<NodeRef<'a>>,
+    },
     /// `MPVLib.event(id)`
     Other(mpv_event_id),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct EndFile {
+    pub reason: c_int,
+    pub error: c_int,
+    pub playlist_entry_id: i64,
+    pub playlist_insert_id: i64,
+    pub playlist_insert_num_entries: c_int,
 }
 
 #[derive(Debug, PartialEq)]
@@ -30,13 +67,57 @@ pub enum Value<'a> {
     Int64(i64),
     Double(f64),
     String(&'a CStr),
-    /// a format MPVLib has no callback for (OSD string, node, byte array): not delivered
+    Node(NodeRef<'a>),
+    /// a format with no MPVLib callback (OSD string, byte array): not delivered
     Unsupported(mpv_format),
+}
+
+/// An `mpv_node` inside an event; compared by address in tests.
+#[derive(Clone, Copy)]
+pub struct NodeRef<'a>(pub &'a mpv_node);
+
+impl fmt::Debug for NodeRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Node(format {} at {:p})", self.0.format, self.0)
+    }
+}
+
+impl PartialEq for NodeRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
 }
 
 unsafe fn c_str<'a>(p: *const c_char) -> Option<&'a CStr> {
     // SAFETY: the caller passes null or a NUL-terminated string valid for 'a
     (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) })
+}
+
+/// The value in a property event or get-property reply.
+///
+/// # Safety
+/// `prop` is as mpv sends it, valid for `'a`.
+unsafe fn value<'a>(prop: &'a mpv_event_property) -> Value<'a> {
+    let data = prop.data;
+    if data.is_null() {
+        // mpv sets format NONE whenever data is null
+        return Value::None;
+    }
+    // SAFETY: `format` says what `data` points to
+    unsafe {
+        match prop.format {
+            MPV_FORMAT_NONE => Value::None,
+            MPV_FORMAT_FLAG => Value::Flag(*data.cast::<c_int>() != 0),
+            MPV_FORMAT_INT64 => Value::Int64(*data.cast::<i64>()),
+            MPV_FORMAT_DOUBLE => Value::Double(*data.cast::<f64>()),
+            MPV_FORMAT_STRING => match c_str(*data.cast::<*const c_char>()) {
+                Some(s) => Value::String(s),
+                None => Value::None,
+            },
+            MPV_FORMAT_NODE => Value::Node(NodeRef(&*data.cast::<mpv_node>())),
+            other => Value::Unsupported(other),
+        }
+    }
 }
 
 /// Decodes `ev`. `None` for `MPV_EVENT_NONE` (a wakeup or timeout) and for
@@ -63,32 +144,60 @@ pub unsafe fn decode<'a>(ev: &'a mpv_event) -> Option<Event<'a>> {
             MPV_EVENT_PROPERTY_CHANGE => {
                 let prop = ev.data.cast::<mpv_event_property>().as_ref()?;
                 let name = c_str(prop.name)?;
-                let data = prop.data;
-                let value = if data.is_null() {
-                    // mpv sets format NONE whenever data is null
-                    Value::None
-                } else {
-                    match prop.format {
-                        MPV_FORMAT_NONE => Value::None,
-                        MPV_FORMAT_FLAG => Value::Flag(*data.cast::<c_int>() != 0),
-                        MPV_FORMAT_INT64 => Value::Int64(*data.cast::<i64>()),
-                        MPV_FORMAT_DOUBLE => Value::Double(*data.cast::<f64>()),
-                        MPV_FORMAT_STRING => match c_str(*data.cast::<*const c_char>()) {
-                            Some(s) => Value::String(s),
-                            None => Value::None,
-                        },
-                        other => Value::Unsupported(other),
-                    }
-                };
-                Some(Event::Property { name, value })
+                Some(Event::Property {
+                    userdata: ev.reply_userdata,
+                    name,
+                    value: value(prop),
+                })
+            }
+            MPV_EVENT_START_FILE => {
+                let start = ev.data.cast::<mpv_event_start_file>().as_ref()?;
+                Some(Event::StartFile {
+                    playlist_entry_id: start.playlist_entry_id,
+                })
             }
             MPV_EVENT_END_FILE => {
                 let end = ev.data.cast::<mpv_event_end_file>().as_ref()?;
-                Some(Event::EndFile {
+                Some(Event::EndFile(EndFile {
                     reason: end.reason,
                     error: end.error,
-                })
+                    playlist_entry_id: end.playlist_entry_id,
+                    playlist_insert_id: end.playlist_insert_id,
+                    playlist_insert_num_entries: end.playlist_insert_num_entries,
+                }))
             }
+            MPV_EVENT_CLIENT_MESSAGE => {
+                let msg = ev.data.cast::<mpv_event_client_message>().as_ref()?;
+                let n = usize::try_from(msg.num_args).unwrap_or(0);
+                let args = if n == 0 || msg.args.is_null() {
+                    Vec::new()
+                } else {
+                    (0..n)
+                        .map(|i| c_str(*msg.args.add(i)).unwrap_or(c""))
+                        .collect()
+                };
+                Some(Event::ClientMessage(args))
+            }
+            MPV_EVENT_GET_PROPERTY_REPLY => Some(Event::GetPropertyReply {
+                userdata: ev.reply_userdata,
+                error: ev.error,
+                value: match ev.data.cast::<mpv_event_property>().as_ref() {
+                    Some(prop) if ev.error >= 0 => value(prop),
+                    _ => Value::None,
+                },
+            }),
+            MPV_EVENT_SET_PROPERTY_REPLY => Some(Event::SetPropertyReply {
+                userdata: ev.reply_userdata,
+                error: ev.error,
+            }),
+            MPV_EVENT_COMMAND_REPLY => Some(Event::CommandReply {
+                userdata: ev.reply_userdata,
+                error: ev.error,
+                result: match ev.data.cast::<mpv_event_command>().as_ref() {
+                    Some(cmd) if ev.error >= 0 => Some(NodeRef(&cmd.result)),
+                    _ => None,
+                },
+            }),
             id => Some(Event::Other(id)),
         }
     }
@@ -146,7 +255,7 @@ mod tests {
     fn decode_property(mut prop: mpv_event_property) -> Option<(String, String)> {
         let ev = event(MPV_EVENT_PROPERTY_CHANGE, (&raw mut prop).cast());
         match unsafe { decode(&ev) }? {
-            Event::Property { name, value } => {
+            Event::Property { name, value, .. } => {
                 Some((name.to_string_lossy().into_owned(), format!("{value:?}")))
             }
             other => panic!("decoded as {other:?}"),
@@ -165,7 +274,7 @@ mod tests {
 
     #[test]
     fn plain_events_keep_their_id() {
-        for id in [1, 6, 8, 11, 16, 17, 18, 20, 21, 24, 25, 99] {
+        for id in [1, 8, 11, 17, 18, 20, 21, 24, 25, 99] {
             assert_eq!(
                 decode_plain(id, ptr::null_mut()),
                 Some(format!("{:?}", Event::Other(id)))
@@ -174,24 +283,124 @@ mod tests {
     }
 
     #[test]
-    fn end_file_carries_reason_and_error() {
+    fn end_file_carries_everything_mpv_sends() {
         let mut end = mpv_event_end_file {
             reason: 4,
             error: -13,
             playlist_entry_id: 1,
-            playlist_insert_id: 0,
-            playlist_insert_num_entries: 0,
+            playlist_insert_id: 7,
+            playlist_insert_num_entries: 2,
         };
         let ev = event(MPV_EVENT_END_FILE, (&raw mut end).cast());
         assert_eq!(
             unsafe { decode(&ev) },
-            Some(Event::EndFile {
+            Some(Event::EndFile(EndFile {
                 reason: 4,
-                error: -13
-            })
+                error: -13,
+                playlist_entry_id: 1,
+                playlist_insert_id: 7,
+                playlist_insert_num_entries: 2,
+            }))
         );
         // never sent like this, but must not crash
         assert_eq!(decode_plain(MPV_EVENT_END_FILE, ptr::null_mut()), None);
+    }
+
+    #[test]
+    fn start_file_carries_the_entry_id() {
+        let mut start = mpv_event_start_file {
+            playlist_entry_id: 42,
+        };
+        let ev = event(MPV_EVENT_START_FILE, (&raw mut start).cast());
+        assert_eq!(
+            unsafe { decode(&ev) },
+            Some(Event::StartFile {
+                playlist_entry_id: 42
+            })
+        );
+        assert_eq!(decode_plain(MPV_EVENT_START_FILE, ptr::null_mut()), None);
+    }
+
+    #[test]
+    fn client_message_arguments() {
+        let mut args = [c"hello".as_ptr(), ptr::null(), c"wörld".as_ptr()];
+        let mut msg = mpv_event_client_message {
+            num_args: 3,
+            args: args.as_mut_ptr(),
+        };
+        let ev = event(MPV_EVENT_CLIENT_MESSAGE, (&raw mut msg).cast());
+        assert_eq!(
+            unsafe { decode(&ev) },
+            Some(Event::ClientMessage(vec![c"hello", c"", c"wörld"]))
+        );
+        msg.num_args = 0;
+        msg.args = ptr::null_mut();
+        let ev = event(MPV_EVENT_CLIENT_MESSAGE, (&raw mut msg).cast());
+        assert_eq!(unsafe { decode(&ev) }, Some(Event::ClientMessage(vec![])));
+    }
+
+    #[test]
+    fn replies_carry_their_userdata_error_and_value() {
+        let mut node = mpv_node {
+            u: mpv_node_u { int64: 5 },
+            format: MPV_FORMAT_INT64,
+        };
+        let mut prop = property(c"volume", MPV_FORMAT_NODE, (&raw mut node).cast());
+        let mut ev = event(MPV_EVENT_GET_PROPERTY_REPLY, (&raw mut prop).cast());
+        ev.reply_userdata = 9;
+        assert_eq!(
+            unsafe { decode(&ev) },
+            Some(Event::GetPropertyReply {
+                userdata: 9,
+                error: 0,
+                value: Value::Node(NodeRef(&node)),
+            })
+        );
+        // on error mpv sends format NONE; never look at the data then
+        ev.error = -8;
+        assert!(matches!(
+            unsafe { decode(&ev) },
+            Some(Event::GetPropertyReply {
+                userdata: 9,
+                error: -8,
+                value: Value::None
+            })
+        ));
+
+        let mut set = event(MPV_EVENT_SET_PROPERTY_REPLY, ptr::null_mut());
+        set.reply_userdata = u64::MAX;
+        set.error = -10;
+        assert_eq!(
+            unsafe { decode(&set) },
+            Some(Event::SetPropertyReply {
+                userdata: u64::MAX,
+                error: -10
+            })
+        );
+
+        let mut cmd = mpv_event_command {
+            result: mpv_node::NONE,
+        };
+        let mut ev = event(MPV_EVENT_COMMAND_REPLY, (&raw mut cmd).cast());
+        ev.reply_userdata = 3;
+        let decoded = unsafe { decode(&ev) };
+        assert_eq!(
+            decoded,
+            Some(Event::CommandReply {
+                userdata: 3,
+                error: 0,
+                result: Some(NodeRef(&cmd.result)),
+            })
+        );
+        ev.error = -12;
+        assert!(matches!(
+            unsafe { decode(&ev) },
+            Some(Event::CommandReply {
+                error: -12,
+                result: None,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -246,9 +455,28 @@ mod tests {
         // unavailable: mpv sends format NONE with null data; a null with
         // another format is treated the same instead of dereferenced
         assert_eq!(p(MPV_FORMAT_DOUBLE, ptr::null_mut()), "None");
-        // OSD string and node have no MPVLib callback
+        // OSD string and byte array have no MPVLib callback
         assert_eq!(p(2, (&raw mut string).cast()), "Unsupported(2)");
-        assert_eq!(p(6, (&raw mut int).cast()), "Unsupported(6)");
+        assert_eq!(p(9, (&raw mut int).cast()), "Unsupported(9)");
+    }
+
+    #[test]
+    fn node_values_point_at_mpvs_node() {
+        let mut node = mpv_node {
+            u: mpv_node_u { flag: 1 },
+            format: MPV_FORMAT_FLAG,
+        };
+        let mut prop = property(c"pause", MPV_FORMAT_NODE, (&raw mut node).cast());
+        let mut ev = event(MPV_EVENT_PROPERTY_CHANGE, (&raw mut prop).cast());
+        ev.reply_userdata = 12;
+        assert_eq!(
+            unsafe { decode(&ev) },
+            Some(Event::Property {
+                userdata: 12,
+                name: c"pause",
+                value: Value::Node(NodeRef(&node)),
+            })
+        );
     }
 
     #[test]

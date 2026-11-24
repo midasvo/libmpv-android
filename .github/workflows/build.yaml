@@ -239,6 +239,16 @@ jobs:
       - name: Check AAR
         run: ./buildscripts/check-aar.sh
 
+      # libmpv/api/libmpv.api is the public API apps compile against: a removed or
+      # changed line breaks them, so any difference must be made on purpose
+      # (check-api.sh --update) and shows up in review.
+      - name: Check the public API
+        run: ./buildscripts/check-api.sh libmpv/build/outputs/aar/libmpv-release.aar
+
+      # The Kotlin code that needs neither JNI nor mpv (src/test)
+      - name: Unit tests
+        run: ./gradlew :libmpv:testDebugUnitTest --no-configuration-cache -PVERSION_NAME="$VERSION"
+
       - name: Write the SBOM and tool versions
         run: |
           mkdir -p "$RUNNER_TEMP/info"

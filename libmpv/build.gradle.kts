@@ -32,9 +32,20 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // The host unit tests (src/test) cover the Kotlin code that needs neither JNI nor mpv;
+    // android.util.Log, which it logs with, returns defaults there instead of throwing.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
+    // api: Flow and suspend functions are in the public API (MpvAsync.kt, MpvFlows.kt)
+    api(libs.kotlinx.coroutines.core)
+
+    testImplementation(libs.junit)
+
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
 }

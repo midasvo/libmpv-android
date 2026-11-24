@@ -12,3 +12,5 @@ local.properties
 *~
 # cargo vendor output (CI packs it into the corresponding-source tarball)
 /libmpv/src/main/rust/vendor/
+# Kotlin compiler session files
+.kotlin/

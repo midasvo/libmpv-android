@@ -13,11 +13,16 @@
 //! - the registry lock and the lifecycle lock are leaves: held only for a few
 //!   field updates, never while calling mpv or Java or taking another lock
 //!   (`Lifecycle::start_worker` spawns a thread under it, but does not wait
-//!   for that thread);
-//! - the surface lock is held around one `mpv_set_option("wid")` call, and is
-//!   taken only by a thread that is inside the gate; it is the only lock ever
-//!   held while another (the lifecycle lock, when an `Active` drops) is taken,
-//!   so there is a single order: surface, then lifecycle;
+//!   for that thread); so are the stream registries' locks (`stream`) and
+//!   the protocol list's;
+//! - the surface lock is held around one `mpv_set_option("wid")` call, and the
+//!   observations lock around `mpv_observe_property`/`mpv_unobserve_property`
+//!   calls (so that an observation and its removal cannot interleave); each is
+//!   taken only by a thread that is inside the gate, never together, and they
+//!   are the only locks ever held while another (the lifecycle lock, when an
+//!   `Active` drops) is taken, so there is a single order: surface or
+//!   observations, then lifecycle. mpv runs neither call through its core
+//!   thread nor calls back into us from them;
 //! - `destroy` holds no lock while it waits. It waits for two things: the
 //!   event thread to finish (whose callbacks may call back into the instance:
 //!   the gate still admits them, without blocking, until the join is done),
@@ -25,12 +30,24 @@
 //!   code or waits for another thread; they only wait for mpv's core, which
 //!   does not depend on us). Nothing either waits for can be waiting for
 //!   `destroy`, so the waits end.
+//! - The asynchronous calls only queue a request in the gate; their replies
+//!   are events like any other, delivered by the event thread. A reply that
+//!   was still on its way when `destroy` stopped the event thread is never
+//!   delivered: Kotlin fails the request when `destroy` returns.
+//! - Stream callbacks (`stream`) run on mpv's own threads, outside the gate,
+//!   and `mpv_terminate_destroy` waits for them (it closes every stream). A
+//!   thread inside a stream callback of this instance is refused at `enter`
+//!   and in `destroy` (stream_cb.h: calling mpv from there deadlocks), so
+//!   they never wait for anything of ours either. Protocols stay registered
+//!   until `mpv_terminate_destroy` has returned, the last moment mpv may call
+//!   their `open_fn`.
 //!
-//! The one way to wedge `destroy` is in Kotlin: a callback that blocks on the
-//! thread calling `destroy`, which MPVLib's documentation forbids.
+//! The one way to wedge `destroy` is in Kotlin: a callback or stream provider
+//! that blocks on the thread calling `destroy`, which MPVLib's documentation
+//! forbids.
 
 use std::borrow::Cow;
-use std::ffi::{CStr, c_void};
+use std::ffi::{CStr, CString, c_int, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +61,11 @@ use crate::ffi::*;
 use crate::jni::{self, Env, Global, MethodId, Pending, Vm};
 use crate::lifecycle::{Call, CloseError, Lifecycle, StartError};
 use crate::log;
+use crate::node;
+use crate::observations::{self, Observations};
 use crate::registry::Registry;
+use crate::stream;
+use crate::stream_jni;
 
 pub const ILLEGAL_STATE: &CStr = c"java/lang/IllegalStateException";
 pub const RUNTIME: &CStr = c"java/lang/RuntimeException";
@@ -54,6 +75,11 @@ pub enum Failure {
     /// already pending (thrown by a JNI function, or NullPointerException)
     Pending,
     Throw(&'static CStr, Cow<'static, str>),
+    /// `dev.jdtech.mpv.MpvException(error, operation)`
+    Mpv {
+        error: c_int,
+        operation: String,
+    },
 }
 
 impl From<Pending> for Failure {
@@ -73,6 +99,22 @@ impl Failure {
         Failure::Throw(
             ILLEGAL_STATE,
             Cow::Borrowed("MPVLib was destroyed (or the handle is not one of its instances)"),
+        )
+    }
+
+    pub fn mpv(error: c_int, operation: impl Into<String>) -> Failure {
+        Failure::Mpv {
+            error,
+            operation: operation.into(),
+        }
+    }
+
+    fn from_stream_callback() -> Failure {
+        Failure::Throw(
+            ILLEGAL_STATE,
+            Cow::Borrowed(
+                "MPVLib was called from one of its own stream callbacks (mpv's stream thread); mpv would deadlock",
+            ),
         )
     }
 }
@@ -95,6 +137,11 @@ pub struct Instance {
     stop: AtomicBool,
     /// the Surface mpv renders to, kept alive while mpv may use it
     surface: Mutex<Option<Global>>,
+    /// registered stream protocols (`stream_jni` ids), dropped after
+    /// `mpv_terminate_destroy`
+    protocols: Mutex<Vec<i64>>,
+    /// the ids of `MPVLib.observeProperty`'s observations
+    observations: Mutex<Observations>,
 }
 
 /// A call admitted by the gate: the only way to reach the mpv handle.
@@ -116,8 +163,9 @@ pub fn lookup(handle: jlong) -> Option<Arc<Instance>> {
 }
 
 /// Method and class references, looked up once on a thread that can see the
-/// app's classes (the event thread, attached from native code, cannot).
-struct Methods {
+/// app's classes (the event thread and mpv's threads, attached from native
+/// code, cannot).
+pub struct Methods {
     _mpvlib: Global, // keeps the method IDs below valid
     event: MethodId,
     event_end_file: MethodId,
@@ -127,6 +175,9 @@ struct Methods {
     property_double: MethodId,
     property_string: MethodId,
     log_message: MethodId,
+    on_property_change: MethodId,
+    on_reply: MethodId,
+    on_event: MethodId,
     integer: Global,
     integer_value_of: MethodId,
     long: Global,
@@ -135,9 +186,27 @@ struct Methods {
     double_value_of: MethodId,
     boolean: Global,
     boolean_value_of: MethodId,
+    string: Global,
+    mpv_exception: Global,
+    mpv_exception_init: MethodId,
+    _protocol_adapter: Global,
+    pub protocol_open: MethodId,
+    _stream_adapter: Global,
+    pub stream_buffer: MethodId,
+    pub stream_read: MethodId,
+    pub stream_seek: MethodId,
+    pub stream_size: MethodId,
+    pub stream_close: MethodId,
+    pub stream_cancel: MethodId,
 }
 
 static METHODS: OnceLock<Methods> = OnceLock::new();
+
+/// The cached methods; `None` only before the first `create`, when no
+/// instance (and so no callback) exists.
+pub fn methods() -> Option<&'static Methods> {
+    METHODS.get()
+}
 
 impl Methods {
     fn get(env: &Env, vm: Vm) -> jni::Result<&'static Methods> {
@@ -162,6 +231,9 @@ impl Methods {
         let property_double = m(c"eventProperty", c"(Ljava/lang/String;D)V")?;
         let property_string = m(c"eventProperty", c"(Ljava/lang/String;Ljava/lang/String;)V")?;
         let log_message = m(c"logMessage", c"(Ljava/lang/String;ILjava/lang/String;)V")?;
+        let on_property_change = m(c"onPropertyChange", c"(JLjava/lang/Object;)V")?;
+        let on_reply = m(c"onReply", c"(JI[B)V")?;
+        let on_event = m(c"onEvent", c"(IJIIJI[Ljava/lang/String;)V")?;
 
         let boxed = |class: &CStr, sig: &CStr| -> jni::Result<(Global, MethodId)> {
             let cls = env.find_class(class)?;
@@ -172,6 +244,25 @@ impl Methods {
         let (long, long_value_of) = boxed(c"java/lang/Long", c"(J)Ljava/lang/Long;")?;
         let (double, double_value_of) = boxed(c"java/lang/Double", c"(D)Ljava/lang/Double;")?;
         let (boolean, boolean_value_of) = boxed(c"java/lang/Boolean", c"(Z)Ljava/lang/Boolean;")?;
+        let string = global(&env.find_class(c"java/lang/String")?)?;
+
+        let exception = env.find_class(c"dev/jdtech/mpv/MpvException")?;
+        let mpv_exception_init = env.method_id(&exception, c"<init>", c"(ILjava/lang/String;)V")?;
+
+        let protocol = env.find_class(c"dev/jdtech/mpv/internal/ProtocolAdapter")?;
+        let protocol_open = env.method_id(
+            &protocol,
+            c"open",
+            c"(Ljava/lang/String;)Ldev/jdtech/mpv/internal/StreamAdapter;",
+        )?;
+        let stream = env.find_class(c"dev/jdtech/mpv/internal/StreamAdapter")?;
+        let s = |name: &CStr, sig: &CStr| env.method_id(&stream, name, sig);
+        let stream_buffer = s(c"buffer", c"()[B")?;
+        let stream_read = s(c"read", c"(I)I")?;
+        let stream_seek = s(c"seek", c"(J)J")?;
+        let stream_size = s(c"size", c"()J")?;
+        let stream_close = s(c"close", c"()V")?;
+        let stream_cancel = s(c"cancel", c"()V")?;
 
         Ok(Methods {
             _mpvlib: global(&mpvlib)?,
@@ -183,6 +274,9 @@ impl Methods {
             property_double,
             property_string,
             log_message,
+            on_property_change,
+            on_reply,
+            on_event,
             integer,
             integer_value_of,
             long,
@@ -191,6 +285,18 @@ impl Methods {
             double_value_of,
             boolean,
             boolean_value_of,
+            string,
+            mpv_exception: global(&exception)?,
+            mpv_exception_init,
+            _protocol_adapter: global(&protocol)?,
+            protocol_open,
+            _stream_adapter: global(&stream)?,
+            stream_buffer,
+            stream_read,
+            stream_seek,
+            stream_size,
+            stream_close,
+            stream_cancel,
         })
     }
 }
@@ -206,13 +312,40 @@ pub enum Boxed {
 
 pub fn box_value(env: &Env, value: Boxed) -> jni::Result<jobject> {
     let m = METHODS.get().ok_or(Pending)?; // loaded by create, before any handle exists
+    Ok(box_local(env, m, value)?.into_raw())
+}
+
+fn box_local<'e>(env: &'e Env, m: &Methods, value: Boxed) -> jni::Result<jni::Local<'e>> {
     let (cls, method, arg) = match value {
         Boxed::Int(i) => (&m.integer, m.integer_value_of, jvalue { i }),
         Boxed::Long(j) => (&m.long, m.long_value_of, jvalue { j }),
         Boxed::Double(d) => (&m.double, m.double_value_of, jvalue { d }),
         Boxed::Boolean(z) => (&m.boolean, m.boolean_value_of, jvalue { z }),
     };
-    Ok(env.call_static_object(cls, method, &[arg])?.into_raw())
+    env.call_static_object(cls, method, &[arg])
+}
+
+/// Throws `MpvException(error, operation)`, or a RuntimeException if that
+/// cannot be built.
+pub fn throw_mpv(env: &Env, error: c_int, operation: &str) {
+    let thrown = (|| -> jni::Result<()> {
+        let m = METHODS.get().ok_or(Pending)?;
+        let op = CString::new(operation.replace('\0', "?")).unwrap_or_default();
+        let op = env.new_string(&op)?;
+        let ex = env.new_object(
+            &m.mpv_exception,
+            m.mpv_exception_init,
+            &[jvalue { i: error }, jvalue { l: op.as_raw() }],
+        )?;
+        env.throw_object(&ex);
+        Ok(())
+    })();
+    if thrown.is_err() && !env.exception_pending() {
+        env.throw(
+            RUNTIME,
+            &format!("{operation}: mpv error {error} ({})", error_string(error)),
+        );
+    }
 }
 
 static FFMPEG_JNI: Once = Once::new();
@@ -265,6 +398,8 @@ pub fn create(env: &Env, this: jobject, app_context: jobject) -> Result<jlong> {
         lifecycle: Lifecycle::new(),
         stop: AtomicBool::new(false),
         surface: Mutex::new(None),
+        protocols: Mutex::new(Vec::new()),
+        observations: Mutex::new(Observations::default()),
     });
     match INSTANCES.insert(instance) {
         Ok(handle) => Ok(handle),
@@ -277,7 +412,16 @@ pub fn create(env: &Env, this: jobject, app_context: jobject) -> Result<jlong> {
 }
 
 impl Instance {
+    /// What marks this instance's stream callbacks (`stream::in_callback_of`):
+    /// its address, stable while it exists.
+    fn owner(&self) -> usize {
+        ptr::from_ref(self) as usize
+    }
+
     pub fn enter(&self) -> Result<Active<'_>> {
+        if stream::in_callback_of(self.owner()) {
+            return Err(Failure::from_stream_callback());
+        }
         let call = self.lifecycle.enter().ok_or_else(Failure::destroyed)?;
         Ok(Active {
             instance: self,
@@ -370,6 +514,73 @@ impl Instance {
         *current = None;
         Ok(())
     }
+
+    /// `nativeObserveProperty`: observes with a new id, remembered under the
+    /// name for `unobserve_legacy`. An error is logged, as before.
+    pub fn observe_legacy(&self, name: &CStr, format: c_int) -> Result<()> {
+        let active = self.enter()?;
+        let mut observations = self
+            .observations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let id = observations.add(name);
+        // SAFETY: an admitted call and a NUL-terminated name
+        let r = unsafe { mpv_observe_property(active.mpv(), id, name.as_ptr(), format) };
+        if r < 0 {
+            observations.remove(name, id);
+            log::error(&format!(
+                "mpv_observe_property({}) format {format} returned error {}",
+                name.to_string_lossy(),
+                error_string(r)
+            ));
+        }
+        Ok(())
+    }
+
+    /// `Native.unobserveLegacyProperty`: undoes every `observe_legacy` of
+    /// `name`; the number of observations removed or a negative mpv error.
+    pub fn unobserve_legacy(&self, name: &CStr) -> Result<c_int> {
+        let active = self.enter()?;
+        let mut observations = self
+            .observations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut removed: c_int = 0;
+        for id in observations.take(name) {
+            // SAFETY: an admitted call
+            let r = unsafe { mpv_unobserve_property(active.mpv(), id) };
+            if r < 0 {
+                return Ok(r);
+            }
+            removed = removed.saturating_add(r);
+        }
+        Ok(removed)
+    }
+
+    /// `Native.addStreamProtocol`: registers `adapter` (a ProtocolAdapter)
+    /// for `protocol://` URIs.
+    pub fn add_stream_protocol(&self, env: &Env, protocol: &CStr, adapter: jobject) -> Result<()> {
+        let active = self.enter()?;
+        let backend = stream_jni::JniProtocol::new(env, self.vm, adapter, self.owner())?;
+        let name = protocol.to_string_lossy();
+        let Some((id, user_data, open_fn)) = stream::register(backend) else {
+            return Err(Failure::runtime("out of stream protocol ids"));
+        };
+        // SAFETY: an admitted call; `user_data` and `open_fn` stay valid until
+        // `destroy` unregisters them after mpv_terminate_destroy
+        let r =
+            unsafe { mpv_stream_cb_add_ro(active.mpv(), protocol.as_ptr(), user_data, open_fn) };
+        if r < 0 {
+            stream::unregister::<stream_jni::JniProtocol>(id);
+            return Err(Failure::mpv(r, format!("registerStreamProtocol({name})")));
+        }
+        // while still in the gate, so destroy (after finish_close) sees it
+        self.protocols
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(id);
+        Ok(())
+    }
 }
 
 /// `nativeDestroy`. A handle that is unknown, or whose instance another
@@ -379,6 +590,10 @@ pub fn destroy(handle: jlong) -> Result<()> {
         log::verbose(|| "Cannot destroy mpv: mpv is not initialized".into());
         return Ok(());
     };
+    // mpv_terminate_destroy would wait for this very callback to return
+    if stream::in_callback_of(instance.owner()) {
+        return Err(Failure::from_stream_callback());
+    }
 
     let worker = match instance.lifecycle.begin_close() {
         Ok(worker) => worker,
@@ -408,10 +623,20 @@ pub fn destroy(handle: jlong) -> Result<()> {
 
     // Refuse new calls and wait for those in flight: then nothing else uses mpv.
     instance.lifecycle.finish_close();
-    // SAFETY: the event thread is joined and no call is in flight or can start
+    // SAFETY: the event thread is joined and no call is in flight or can start.
+    // This closes every custom stream (their close callbacks run meanwhile, on
+    // mpv's threads) and is the last point at which mpv may open new ones.
     unsafe { mpv_terminate_destroy(instance.mpv.0) };
 
-    // mpv no longer renders to the surface
+    // mpv no longer opens streams for the protocols, nor renders to the surface
+    for id in instance
+        .protocols
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .drain(..)
+    {
+        stream::unregister::<stream_jni::JniProtocol>(id);
+    }
     instance
         .surface
         .lock()
@@ -476,12 +701,97 @@ fn event_loop(instance: Arc<Instance>) {
     // `attached` detaches this thread from the VM when dropped
 }
 
+/// The encoding of `node` as a `byte[]`, or the mpv error to report instead.
+///
+/// # Safety
+/// `node` is a valid node from mpv.
+unsafe fn node_bytes<'e>(
+    env: &'e Env,
+    node: &mpv_node,
+) -> std::result::Result<jni::Local<'e>, c_int> {
+    let mut out = Vec::new();
+    // SAFETY: the caller's contract
+    if let Err(e) = unsafe { node::encode(node, &mut out) } {
+        log::error(&format!("cannot pass an mpv node to Java: {e:?}"));
+        return Err(MPV_ERROR_GENERIC);
+    }
+    env.new_byte_array(&out).map_err(|_| {
+        env.describe_and_clear_exception();
+        MPV_ERROR_NOMEM
+    })
+}
+
+/// A property value as the Java object `onPropertyChange` takes: Boolean,
+/// Long, Double, String, byte[] (a node) or null.
+fn java_value<'e>(
+    env: &'e Env,
+    m: &Methods,
+    value: &Value<'_>,
+) -> jni::Result<Option<jni::Local<'e>>> {
+    Ok(match value {
+        Value::None | Value::Unsupported(_) => None,
+        Value::Flag(z) => Some(box_local(env, m, Boxed::Boolean(*z))?),
+        Value::Int64(j) => Some(box_local(env, m, Boxed::Long(*j))?),
+        Value::Double(d) => Some(box_local(env, m, Boxed::Double(*d))?),
+        Value::String(s) => Some(env.new_string(s)?),
+        // SAFETY: a node in the current event
+        Value::Node(n) => unsafe { node_bytes(env, n.0) }.ok(),
+    })
+}
+
 fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result<()> {
     // SAFETY: `ev` came from mpv_wait_event and is used before the next one
     let Some(event) = (unsafe { event::decode(ev) }) else {
         return Ok(());
     };
-    let call = |method, args: &[jvalue]| env.call_void(this, method, args);
+    // Each callback runs to completion before the next JNI call: an exception
+    // it leaves (Kotlin's dispatch catches Exceptions, not Errors) is logged
+    // and cleared, so the calls after it are still made.
+    let call = |method, args: &[jvalue]| {
+        env.call_void(this, method, args);
+        env.describe_and_clear_exception();
+    };
+    // the event flow's callback, after the MPVLib.EventObserver one
+    let flow_event = |id: mpv_event_id, end: Option<event::EndFile>, entry: i64, args: jobject| {
+        let end = end.unwrap_or(event::EndFile {
+            reason: 0,
+            error: 0,
+            playlist_entry_id: entry,
+            playlist_insert_id: 0,
+            playlist_insert_num_entries: 0,
+        });
+        call(
+            m.on_event,
+            &[
+                jvalue { i: id },
+                jvalue {
+                    j: end.playlist_entry_id,
+                },
+                jvalue { i: end.reason },
+                jvalue { i: end.error },
+                jvalue {
+                    j: end.playlist_insert_id,
+                },
+                jvalue {
+                    i: end.playlist_insert_num_entries,
+                },
+                jvalue { l: args },
+            ],
+        );
+    };
+    let reply = |userdata: u64, error: c_int, result: Option<&jni::Local<'_>>| {
+        call(
+            m.on_reply,
+            &[
+                jvalue { j: userdata as i64 },
+                jvalue { i: error },
+                jvalue {
+                    l: result.map_or(ptr::null_mut(), jni::Local::as_raw),
+                },
+            ],
+        );
+    };
+
     match event {
         Event::Log {
             prefix,
@@ -504,7 +814,12 @@ fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result
                 ],
             );
         }
-        Event::Property { name, value } => {
+        // MPVLib.observeProperty uses 0 (before) or negative ids
+        Event::Property {
+            userdata,
+            name,
+            value,
+        } if observations::is_legacy(userdata) => {
             let name = env.new_string(name)?;
             let n = jvalue { l: name.as_raw() };
             match value {
@@ -516,21 +831,107 @@ fn deliver(env: &Env, m: &Methods, this: jobject, ev: &mpv_event) -> jni::Result
                     let s = env.new_string(s)?;
                     call(m.property_string, &[n, jvalue { l: s.as_raw() }]);
                 }
-                Value::Unsupported(format) => log::verbose(|| {
+                Value::Node(_) | Value::Unsupported(_) => log::verbose(|| {
+                    let format = match value {
+                        Value::Unsupported(f) => f,
+                        _ => MPV_FORMAT_NODE,
+                    };
                     format!(
                         "sendPropertyUpdateToJava: Unknown property update format received in callback: {format}!"
                     )
                 }),
             }
         }
+        // a property flow
+        Event::Property {
+            userdata, value, ..
+        } => {
+            let value = java_value(env, m, &value)?;
+            call(
+                m.on_property_change,
+                &[
+                    jvalue { j: userdata as i64 },
+                    jvalue {
+                        l: value.as_ref().map_or(ptr::null_mut(), jni::Local::as_raw),
+                    },
+                ],
+            );
+        }
         // Kotlin's eventEndFile also delivers event(MPV_EVENT_END_FILE)
-        Event::EndFile { reason, error } => call(
-            m.event_end_file,
-            &[jvalue { i: reason }, jvalue { i: error }],
-        ),
+        Event::EndFile(end) => {
+            call(
+                m.event_end_file,
+                &[jvalue { i: end.reason }, jvalue { i: end.error }],
+            );
+            flow_event(MPV_EVENT_END_FILE, Some(end), 0, ptr::null_mut());
+        }
+        Event::StartFile { playlist_entry_id } => {
+            log::verbose(|| format!("event: {}", event_name(MPV_EVENT_START_FILE)));
+            call(
+                m.event,
+                &[jvalue {
+                    i: MPV_EVENT_START_FILE,
+                }],
+            );
+            flow_event(
+                MPV_EVENT_START_FILE,
+                None,
+                playlist_entry_id,
+                ptr::null_mut(),
+            );
+        }
+        Event::ClientMessage(args) => {
+            log::verbose(|| format!("event: {}", event_name(MPV_EVENT_CLIENT_MESSAGE)));
+            call(
+                m.event,
+                &[jvalue {
+                    i: MPV_EVENT_CLIENT_MESSAGE,
+                }],
+            );
+            let args = env.new_string_array(&m.string, &args)?;
+            flow_event(MPV_EVENT_CLIENT_MESSAGE, None, 0, args.as_raw());
+        }
+        // Replies go only to the request (MPVLib's async calls), never to an
+        // EventObserver: every reply must reach it, or a coroutine would wait
+        // forever, so a failure to build the result is reported as an error.
+        Event::GetPropertyReply {
+            userdata,
+            error,
+            value,
+        } => match value {
+            Value::Node(n) if error >= 0 => {
+                // SAFETY: a node in the current event
+                match unsafe { node_bytes(env, n.0) } {
+                    Ok(bytes) => reply(userdata, error, Some(&bytes)),
+                    Err(e) => reply(userdata, e, None),
+                }
+            }
+            _ if error >= 0 => match env.new_byte_array(&[0]) {
+                Ok(none) => reply(userdata, error, Some(&none)),
+                Err(_) => {
+                    env.describe_and_clear_exception();
+                    reply(userdata, MPV_ERROR_NOMEM, None);
+                }
+            },
+            _ => reply(userdata, error, None),
+        },
+        Event::SetPropertyReply { userdata, error } => reply(userdata, error, None),
+        Event::CommandReply {
+            userdata,
+            error,
+            result,
+        } => match result {
+            // SAFETY: a node in the current event
+            Some(n) => match unsafe { node_bytes(env, n.0) } {
+                Ok(bytes) => reply(userdata, error, Some(&bytes)),
+                Err(e) => reply(userdata, e, None),
+            },
+            None => reply(userdata, error, None),
+        },
         Event::Other(id) => {
             log::verbose(|| format!("event: {}", event_name(id)));
             call(m.event, &[jvalue { i: id }]);
+            flow_event(id, None, 0, ptr::null_mut());
         }
     }
     Ok(())
