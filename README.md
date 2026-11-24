@@ -26,7 +26,8 @@ dependencies {
 
 The latest version is on [Maven Central](https://central.sonatype.com/artifact/io.github.midasvo/libmpv)
 and on the [releases page](https://github.com/midasvo/libmpv-android/releases). Maven Central needs
-no extra repository.
+no extra repository. On `main` (the next release), the library also brings
+`kotlinx-coroutines-core` with it (see [More of mpv's API](#more-of-mpvs-api-on-main-not-in-130)).
 
 ```kotlin
 import dev.jdtech.mpv.MPVLib
@@ -55,7 +56,123 @@ The Kotlin package is `dev.jdtech.mpv`, as upstream's ([ADR 0001](docs/adr/0001-
 Coming from `dev.jdtech.mpv:libmpv`, change the coordinate and nothing else. Do not depend on both:
 they ship the same native libraries under the same file names.
 
-<!-- API: the new API on main (mpv_node values, suspend functions, Flows, stream protocols) is described here once it is final. -->
+## More of mpv's API (on `main`, not in 1.3.0)
+
+`main` adds structured values, suspend functions, flows and custom protocols, as extension
+functions on `MPVLib` in the same package ([ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)).
+Nothing above changes: the 1.3.0 API is the same, and its observers get what they got before.
+The new functions report mpv's errors as `MpvException` (with mpv's code in `error`), where the
+classic ones return a code or `null`. All of them throw `IllegalStateException` after `destroy()`.
+
+With this API the library depends on `kotlinx-coroutines-core` (an `api` dependency; the version
+is in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)). Your app gets it with the
+library.
+
+**Structured values.** `MpvNode` is mpv's `mpv_node`: maps, arrays and typed scalars instead of
+JSON text. Its accessors return `null` for a node of another kind, so a lookup reads like a path.
+
+```kotlin
+import dev.jdtech.mpv.MpvNode
+import dev.jdtech.mpv.commandNode
+import dev.jdtech.mpv.getPropertyNode
+import dev.jdtech.mpv.setPropertyNode
+
+val tracks = mpv.getPropertyNode("track-list").list.orEmpty()
+val audio = tracks.filter { it["type"]?.string == "audio" }
+audio.firstOrNull()?.get("id")?.let { mpv.setPropertyNode("aid", it) }
+
+val result = mpv.commandNode(MpvNode.command("loadfile", url, "append"))
+val entryId = result["playlist_entry_id"]?.long
+```
+
+Use these instead of `getPropertyString` on a structured property (`track-list`,
+`chapter-list`, `metadata`), and instead of `command` when you need a command's result, typed
+arguments, or its error. They block like the classic calls.
+
+**Suspend functions.** `commandAsync`, `getPropertyAsync` and `setPropertyAsync` use mpv's own
+async API: the calling thread is never blocked, so they are safe on the main thread. Cancelling
+the coroutine stops waiting (and aborts commands that support it); if the instance is destroyed
+while one is pending, it throws `IllegalStateException`.
+
+```kotlin
+import dev.jdtech.mpv.MpvNode
+import dev.jdtech.mpv.commandAsync
+import dev.jdtech.mpv.getPropertyAsync
+import dev.jdtech.mpv.setPropertyAsync
+import kotlinx.coroutines.launch
+
+scope.launch {
+    mpv.commandAsync(MpvNode.command("loadfile", url))
+    mpv.setPropertyAsync("pause", MpvNode.of(false))
+    val volume = mpv.getPropertyAsync("volume").double
+}
+```
+
+Prefer them on the main thread and wherever mpv may be busy (opening a file); the blocking calls
+are fine on a background thread and inside the observer callbacks.
+
+**Flows.** `booleanPropertyFlow`, `longPropertyFlow`, `doublePropertyFlow`, `stringPropertyFlow`
+and `nodePropertyFlow` emit a property's value (first the current one, `null` or `MpvNode.None`
+while it is unavailable) and each change; `eventFlow()` emits mpv's events with their data as
+`MpvPlayerEvent`. They are cold: observation starts when collection starts and ends when it
+ends. A property flow is conflated (a slow collector gets the latest value). The event flow
+buffers 256 events per collector; beyond that it drops the newest and emits one
+`MpvPlayerEvent.Dropped(count)`. When the instance is destroyed, the flows complete.
+
+```kotlin
+import dev.jdtech.mpv.MPVLib
+import dev.jdtech.mpv.MpvPlayerEvent
+import dev.jdtech.mpv.doublePropertyFlow
+import dev.jdtech.mpv.eventFlow
+import kotlinx.coroutines.launch
+
+scope.launch {
+    mpv.doublePropertyFlow("time-pos").collect { position -> showPosition(position) }
+}
+scope.launch {
+    mpv.eventFlow().collect { event ->
+        when (event) {
+            is MpvPlayerEvent.EndFile ->
+                if (event.reason == MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_ERROR) showError(event.error)
+            is MpvPlayerEvent.Dropped -> reloadState()
+            else -> {}
+        }
+    }
+}
+```
+
+Prefer flows in coroutine code, where collection follows a lifecycle (a `ViewModel` scope, say)
+and stops observing on its own. `observeProperty` and the `EventObserver` callbacks remain for
+callback code and Java; `unobserveProperty(name)` now undoes `observeProperty`.
+
+**Custom protocols.** `registerStreamProtocol(protocol, provider)` makes mpv open
+`protocol://...` URIs through your Kotlin code: the `MpvStreamProvider` opens an `MpvStream`, which
+implements `read` and `close` (and `seek`, `size` and `cancel` where it can).
+
+```kotlin
+import android.net.Uri
+import dev.jdtech.mpv.MpvStream
+import dev.jdtech.mpv.registerStreamProtocol
+import java.io.FileNotFoundException
+
+// plays content:// URIs as "local://content://..." through the app's ContentResolver
+mpv.registerStreamProtocol("local") { uri ->
+    val input = contentResolver.openInputStream(Uri.parse(uri.removePrefix("local://")))
+        ?: throw FileNotFoundException(uri)
+    object : MpvStream {
+        override fun read(buffer: ByteArray, offset: Int, length: Int) = input.read(buffer, offset, length)
+        override fun close() = input.close()
+    }
+}
+mpv.command(arrayOf("loadfile", "local://$contentUri"))
+```
+
+Use it when mpv cannot open the source itself: your own HTTP client (authentication, caching), a
+`ContentResolver`, data in memory. The provider and the streams run on mpv's threads and must not
+call the same `MPVLib` instance. The KDoc in `MpvStreams.kt` has the rules.
+
+Every public function and type has KDoc. The exact public API is in
+[`libmpv/api/libmpv.api`](libmpv/api/libmpv.api).
 
 ## Released and unreleased
 
@@ -69,6 +186,10 @@ was built by the old single-job pipeline.
   memory, a call racing `destroy()` on another thread is safe, and a second `destroy()` does
   nothing. `destroy()` from an observer or log callback throws `IllegalStateException` (call it
   from another thread). A `null` string argument throws `NullPointerException`.
+- **More of mpv's API** ([above](#more-of-mpvs-api-on-main-not-in-130), [ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)):
+  structured values (`MpvNode`), suspend functions on mpv's async API, flows of properties and
+  events, custom protocols implemented in Kotlin, and `unobserveProperty`. All additive. The
+  library now depends on `kotlinx-coroutines-core`.
 - **An mpv patch** that rounds the AudioTrack buffer to whole frames, so 22,050 Hz audio is no
   longer silent ([ephyra#659](https://github.com/midasvo/ephyra/issues/659)).
 - **More checks in CI:** the dynamic dependencies of every library in every ABI, and instrumented
@@ -88,7 +209,8 @@ Versions are not repeated here, so they cannot go stale:
   place every version is set. Patches to the sources are in [`buildscripts/patches/`](buildscripts/patches/).
 - **In a release:** the release notes list every component version. Releases built by the new
   pipeline also list the tools they were built with and attach an SBOM, `libmpv-<version>.cdx.json`
-  (CycloneDX).
+  (CycloneDX), of the native components and the wrapper's Rust crates. JVM dependencies such as
+  `kotlinx-coroutines-core` are not in it; they are in the POM on Maven Central.
 - **On the landing page:** both, generated from the same files when the page is deployed.
 
 ## Building from source

@@ -30,7 +30,9 @@ What has to stay true:
 - **`assemble`** builds the Rust wrapper for each ABI with `build.sh -n --arch <arch> player`.
   `scripts/player.sh` puts everything the AAR ships for that ABI, stripped, into
   `libmpv/src/main/jniLibs/<abi>`. Gradle then only packages: no CMake, no NDK, no native code. The
-  job runs `check-aar.sh` and writes the SBOM (`sbom.sh`).
+  job writes the SBOM (`sbom.sh`) and runs the checks that need no device: the wrapper's `cargo`
+  checks and host tests, `check-aar.sh`, the API check, the JVM unit tests and `check-docs.sh`
+  (RELEASING.md lists them).
 - **`test`** bundles the AAR again from the same `jniLibs` in a fresh job and fails unless the bytes
   match, then runs the instrumented tests on an x86_64 emulator.
 - **`sources`** packs the corresponding source, with the Rust crates vendored, and fails unless its

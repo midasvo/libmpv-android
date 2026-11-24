@@ -439,6 +439,11 @@ section + section {
   margin-bottom: 2rem;
 }
 
+.section-head.subhead {
+  scroll-margin-top: 72px;
+  margin-top: 3rem;
+}
+
 .section-head p {
   color: var(--on-surface-variant);
   margin-top: 0.5rem;

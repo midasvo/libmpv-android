@@ -29,7 +29,8 @@ All of them are the same kind of bug: a lifetime or an error path managed by han
 boundary.
 
 The wrapper is also about to grow: structured `mpv_node` values, mpv's async API and custom stream
-protocols all add callbacks and memory that crosses the boundary.
+protocols all add callbacks and memory that crosses the boundary (they have since been added:
+[ADR 0005](0005-api-on-top-of-mpvlib.md)).
 
 ## Decision
 
@@ -59,15 +60,17 @@ The ownership design (module docs in `player/src/registry.rs`, `instance.rs` and
   Modified UTF-8 is never involved.
 
 The only dependency is `jni-sys`. The mpv, libavcodec and liblog functions are declared by hand in
-`ffi.rs`, checked against the headers of mpv 0.42.0 (client API 2.5), so the build needs no
-bindgen and no libclang.
+`ffi.rs`, checked against the headers of mpv 0.42.0 (`client.h`, client API 2.6, and
+`stream_cb.h`), so the build needs no bindgen and no libclang.
 
 ## Consequences
 
-- The defects above are gone by construction, not by care in each function. The lifecycle, the
-  registry, the text conversion and the event decoding need neither JNI nor mpv, so they are unit
-  tested on the host (`cargo test` in `libmpv/src/main/rust`, 34 tests). The rest is covered by the
-  instrumented tests in `libmpv/src/androidTest` on an x86_64 emulator.
+- The defects above are gone by construction, not by care in each function. The modules that need
+  neither JNI nor mpv (the lifecycle, the registry, the text conversion, the event and node
+  decoding, the stream bookkeeping) are unit tested on the host with `cargo test` in
+  `libmpv/src/main/rust`. CI runs those tests, `cargo fmt --check` and `cargo clippy` in the
+  Assemble job of `build.yaml`. The rest is covered by the instrumented tests in
+  `libmpv/src/androidTest` on an x86_64 emulator.
 - The build needs a Rust toolchain: `rustup`, with the version and the four Android targets pinned
   in `rust-toolchain.toml`. `scripts/player.sh` points cargo at the NDK's clang, so no `cargo-ndk`.
   Gradle no longer runs CMake or needs the NDK (see ADR 0004).

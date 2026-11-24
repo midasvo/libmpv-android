@@ -29,7 +29,7 @@ against the table below: some upstream changes merge without a conflict but do n
 |---|---|
 | A version in `buildscripts/include/depinfo.sh` | Usually merges. If it conflicts, keep the higher version on each line, and its `sha256_*`. Upstream's `v_cmake` does not exist here (Gradle runs no CMake): drop it. |
 | `libmpv/src/main/cpp/**` (its C++ wrapper) | That directory does not exist here, so git reports a modify/delete conflict. Read the change, port it to the Rust crate in `libmpv/src/main/rust` by hand (or decide that it does not apply, and say why in the merge commit), then keep the directory deleted with `git rm -r libmpv/src/main/cpp`. Add a test for the behaviour if it has none. |
-| `MPVLib.kt` | Merge by hand. A new `external fun` needs a matching export in `player/src/exports.rs` (same `Java_dev_jdtech_mpv_MPVLib_*` name and JNI signature), or calling it throws `UnsatisfiedLinkError`. |
+| `MPVLib.kt` | Merge by hand; ours also holds the runtime of the new API (`runtime`, `handle()`, the `on*` methods libplayer calls). A new `external fun` needs a matching export in `player/src/exports.rs` (same `Java_dev_jdtech_mpv_MPVLib_*` name and JNI signature), or calling it throws `UnsatisfiedLinkError`. |
 | `buildscripts/scripts/<name>.sh`, `build.sh`, `download-deps.sh`, `download-sdk.sh` | Usually merges. The fork has removed the lines that symlink libraries into `jniLibs` (`ln -sf ... "$native_dir"` in `mpv.sh` and `ffmpeg.sh`) and the CMake install: `scripts/player.sh` fills `jniLibs`. Keep them out if upstream touches them. |
 | A new dependency (a new `v_*`, script and `dep_*` entry) | Add it to the component table in `buildscripts/sbom.sh` (which fails on a `v_*` it does not know) and to the licence table in `README.md` (`buildscripts/check-docs.sh` fails until it is there). If it is fetched as a tarball, it needs a `sha256_*` too. |
 | `libmpv/build.gradle.kts` | Keep ours: our `coordinates(...)` and `pom { }`, no `externalNativeBuild`. The usual conflict is upstream bumping `version = "x.y.z"` in `coordinates(...)`: keep our line, which reads `VERSION_NAME`. |
@@ -71,7 +71,14 @@ By area, compared with upstream:
   observer that throws instead of stopping the others, still delivers `MPV_EVENT_END_FILE` to
   `event(int)` after upstream's `eventEndFile(reason, error)` (upstream sends it only to
   `eventEndFile`, which would break observers such as Ephyra's player), and documents the threading
-  rules, including that `destroy()` from a callback throws.
+  rules, including that `destroy()` from a callback throws. It also holds the per-instance runtime
+  of the new API.
+- **The API on top of `MPVLib`** ([ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)): structured
+  values, suspend functions, flows and custom protocols, as extension functions in new files
+  (`MpvNode.kt`, `MpvNodes.kt`, `MpvAsync.kt`, `MpvFlows.kt`, `MpvPlayerEvent.kt`, `MpvStreams.kt`,
+  `MpvException.kt`, `internal/`), with `kotlinx-coroutines-core` as an `api` dependency and
+  ProGuard rules for the classes libplayer calls by name. The public API is checked against
+  `libmpv/api/libmpv.api`.
 - **The native build.** `buildscripts/patches/mpv/`: mpv source patches, applied by `patch.sh` with
   `git apply`. `0001-ao_audiotrack-align-buffer-to-frames.patch` rounds the AudioTrack buffer to whole
   frames, so 22,050 Hz audio is no longer silent ([ephyra#659](https://github.com/midasvo/ephyra/issues/659));
@@ -79,15 +86,57 @@ By area, compared with upstream:
   `libmpv.so` is reproducible. `depinfo.sh` and `download-deps.sh`: sha256-verified tarballs, the
   curl version format (`8_23_0`), a pinned gas-preprocessor and a pinned meson (`v_meson`, installed
   by `include/install-system-deps.sh`). `scripts/player.sh` builds the wrapper and fills `jniLibs`;
-  `scripts/mpv-android.sh` only runs Gradle. New scripts: `check-aar.sh`, `sbom.sh`,
-  `include/hash-sources.sh`, `site-data.sh`, `check-docs.sh`.
+  `scripts/mpv-android.sh` only runs Gradle. New scripts: `check-aar.sh`, `check-api.sh`,
+  `check-docs.sh`, `sbom.sh`, `site-data.sh`, `include/hash-sources.sh`.
 - **CI and releases.** `build.yaml` and `publish.yaml` ([ADR 0004](docs/adr/0004-build-pipeline.md)),
   `sync-upstream.yaml`, `pages.yaml`. `renovate.json` adds managers for meson and curl.
 - **Tests.** The instrumented tests in `libmpv/src/androidTest` (lifecycle, playback of a generated
-  file, what the build contains), and their dependencies in `gradle/libs.versions.toml`. The
-  wrapper's host tests are in the crate (`cargo test`).
+  file, what the build contains, the node, async, flow and stream API), the JVM unit tests in
+  `libmpv/src/test`, and their dependencies in `gradle/libs.versions.toml`. The wrapper's host
+  tests are in the crate (`cargo test`).
 - **Documentation and site.** `README.md`, this file, `docs/adr/`, `buildscripts/README.md`, and
   `site/` (the landing page at <https://midasvo.nl/libmpv-android/>).
+
+## Checks on every build
+
+`build.yaml` runs these on every pull request, on `main` and in every release build. A release
+cannot pass with one of them failing.
+
+| Job | Check | What it catches |
+|---|---|---|
+| Assemble | `cargo fmt --check`, `cargo clippy` (host and Android), `cargo test` in `libmpv/src/main/rust` | formatting, lints and the wrapper's host unit tests |
+| Assemble | `buildscripts/check-aar.sh` | a missing library, a system dependency not on its allowlist, 64-bit libraries not aligned for 16 KiB pages |
+| Assemble | `buildscripts/check-api.sh` | a change to the public API that `libmpv/api/libmpv.api` does not show (next section) |
+| Assemble | `./gradlew :libmpv:testDebugUnitTest` | the JVM unit tests of the Kotlin code that needs neither JNI nor mpv |
+| Assemble | the SBOM check, and `buildscripts/check-docs.sh` | a component without version, source or licence; a README licence table that disagrees with `sbom.sh` |
+| Instrumented tests | the AAR rebuilt from the same `jniLibs`, then `connectedDebugAndroidTest` on an x86_64 emulator | a non-reproducible AAR; the wrapper and the API against a real mpv |
+| Corresponding source | the source tarball hashed against every ABI's build | a tarball that is not the source of the build |
+| Build | all of the above succeeded | the required check on `main` |
+
+## The API contract
+
+`libmpv/api/libmpv.api` is the public API of the library: every public class, method and field
+of the release AAR's classes, as `javap` prints them, sorted (`dev.jdtech.mpv.internal` and
+compiler-generated names left out). `buildscripts/check-api.sh` dumps the AAR that CI just built and
+fails with a diff when it differs from the file.
+
+- **Added lines** are new API: compatible, a minor version.
+- **Removed or changed lines** break apps compiled against an earlier release: a major version, by
+  the rule under "Cutting a release". Prefer to add and deprecate instead.
+- **To accept a deliberate change,** build the AAR and update the file in the same pull request,
+  so the diff shows up in review:
+  ```sh
+  ./gradlew :libmpv:assembleRelease
+  ./buildscripts/check-api.sh --update
+  git diff libmpv/api/libmpv.api
+  ```
+  It needs a JDK (`javap` and `jar`). The dump depends only on the Kotlin and Java classes, so an
+  AAR built without native libraries gives the same file. On Windows with `core.autocrlf=true`, a
+  fresh checkout has the file with CRLF line endings and the check reports every line as changed:
+  run it on Linux (or WSL), or check out with LF endings.
+
+An upstream sync that changes `MPVLib`'s public methods changes the dump too: decide whether to
+take the change, and what it means for the version, before updating the file.
 
 ## Renovate
 
@@ -137,9 +186,11 @@ Gradle or the workflows, does not touch the native build.
 
 ## Cutting a release
 
-Versions are our own semver, starting at `1.1.0`. Raise the minor version for dependency bumps, the
-patch version for build or wrapper fixes, and the major version for a breaking API change. Each
-release's notes list the exact component versions.
+Versions are our own semver, starting at `1.1.0`. Raise the major version for a breaking API change
+(a line removed or changed in `libmpv/api/libmpv.api`, or a change in behaviour that existing code
+relies on), the minor version for new API (lines only added to the dump) or dependency bumps, and
+the patch version for build or wrapper fixes. Each release's notes list the exact component
+versions. `git diff vA.B.C -- libmpv/api/libmpv.api` against the last release shows which it is.
 
 1. Make sure `main` is green, and merge a pending upstream sync if you want it in.
 2. Rehearse it: **Actions → Publish → Run workflow** with the version, or
@@ -176,7 +227,9 @@ release's notes list the exact component versions.
 6. Check the draft release notes, add what changed for the player, and publish the release.
 7. Verify it as a user would (next section).
 8. Update the "Released and unreleased" section of `README.md` and the release text on the site
-   (`site/index.html`, marked `release-text`, including its `data-written-for` version). The site's version numbers and component table are
+   (`site/index.html`, marked `release-text`, including its `data-written-for` version). Once the
+   new API is released, drop "on `main`" from its README heading and the site's `#api` block, and
+   say so in the release notes. The site's version numbers and component table are
    generated: they follow Maven Central on the next deploy of the site, which runs daily, on a push
    to `site/`, or by hand with `gh workflow run pages.yaml -R midasvo/libmpv-android --ref main`.
 9. Bump Ephyra: `libmpv` in `gradle/libs.versions.toml`, then run `docs/mpv-checklist.md` there.
@@ -217,7 +270,8 @@ file's digest, so it works the same for the AAR downloaded from Maven Central.
 
 Releases after 1.3.0 also attach `libmpv-<version>.cdx.json`, a CycloneDX SBOM of the bundled
 components: each with version, licence and source (git tag or tarball checksum), the patches applied
-to it, and the Rust crates of the wrapper.
+to it, and the Rust crates of the wrapper. JVM dependencies (`kotlinx-coroutines-core`) are not in
+it; the POM lists them.
 
 ## The landing page
 
