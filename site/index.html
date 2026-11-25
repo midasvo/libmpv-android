@@ -122,11 +122,9 @@ mpv.destroy()</code></pre>
         </div>
       </div>
 
-      <!-- On main, not in a release: when it is released, drop "on main" from the heading and the
-           first sentence (RELEASING.md, step 8). -->
       <div class="section-head subhead reveal" id="api">
-        <h3>More of mpv's API, on <code>main</code></h3>
-        <p>In the next release, not in 1.3.0. Extension functions on <code>MPVLib</code>, in the same package: nothing above changes, and observers get what they got before. The new functions throw <code>MpvException</code> with mpv's error code. The library then brings <code>kotlinx-coroutines-core</code> with it.</p>
+        <h3>More of mpv's API</h3>
+        <p>Since 1.4.0. Extension functions on <code>MPVLib</code>, in the same package: nothing above changes, and observers get what they got before. The new functions throw <code>MpvException</code> with mpv's error code. The library brings <code>kotlinx-coroutines-core</code> with it.</p>
       </div>
 
       <!-- No code here on purpose: the README's examples are compiled and checked
@@ -186,17 +184,10 @@ mpv.destroy()</code></pre>
       <!-- release-text: written by hand for the release in data-written-for. Update both cards and
            that attribute with each release (RELEASING.md, step 8). While data.js names a newer
            release, site.js hides the cards and shows the paragraph after them instead. -->
-      <div class="cards reveal" data-written-for="1.3.0">
+      <div class="cards reveal" data-written-for="1.4.0">
         <div class="card">
-          <h3>In 1.3.0, the latest release</h3>
-          <p>The C++ JNI wrapper inherited from upstream, built by the old single-job pipeline. The AAR is signed, and the release attaches its corresponding source.</p>
-          <ul>
-            <li><code>eventEndFile(reason, error)</code> with mpv's end-file reason and error code. <code>MPV_EVENT_END_FILE</code> still reaches <code>event()</code> as before.</li>
-            <li>Every observer callback has an empty default, so you override only the ones you use.</li>
-          </ul>
-        </div>
-        <div class="card">
-          <h3>On <code>main</code>, in the next release</h3>
+          <h3>In 1.4.0, the latest release</h3>
+          <p>The first release built by the new pipeline. The AAR is signed, has a provenance attestation and an SBOM, and the release attaches its corresponding source. Since 1.3.0:</p>
           <ul>
             <li><strong>A JNI wrapper in Rust.</strong> Same Kotlin API. A call after <code>destroy()</code> throws <code>IllegalStateException</code> instead of touching freed memory, a call racing <code>destroy()</code> is safe, and a second <code>destroy()</code> does nothing.</li>
             <li><code>destroy()</code> from a callback throws (call it from another thread), and a <code>null</code> string argument throws <code>NullPointerException</code>.</li>
@@ -205,6 +196,10 @@ mpv.destroy()</code></pre>
             <li>An FFmpeg patch so https works when the server asks for an optional client certificate (Caddy <code>verify_if_given</code>, nginx <code>ssl_verify_client optional</code>).</li>
             <li>A new build pipeline. Releases built by it come with an SBOM and a provenance attestation.</li>
           </ul>
+        </div>
+        <div class="card">
+          <h3>On <code>main</code>, in the next release</h3>
+          <p>Nothing a user would notice beyond 1.4.0 yet.</p>
         </div>
       </div>
       <p class="meta" data-text-stale hidden><span data-v="release"></span> has been released since this section was written. Its <a data-v="release-link" href="https://github.com/midasvo/libmpv-android/releases">release notes</a> say what is in it.</p>
