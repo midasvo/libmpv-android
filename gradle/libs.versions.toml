@@ -1,5 +1,5 @@
 [versions]
-android-plugin = "9.5.2"
+android-plugin = "9.5.3"
 maven-publish = "0.37.0"
 kotlinx-coroutines = "1.11.0"
 androidx-test-runner = "1.7.0"
