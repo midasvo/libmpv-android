@@ -27,8 +27,8 @@ dependencies {
 
 The latest version is on [Maven Central](https://central.sonatype.com/artifact/io.github.midasvo/libmpv)
 and on the [releases page](https://github.com/midasvo/libmpv-android/releases). Maven Central needs
-no extra repository. On `main` (the next release), the library also brings
-`kotlinx-coroutines-core` with it (see [More of mpv's API](#more-of-mpvs-api-on-main-not-in-130)).
+no extra repository. Since 1.4.0 the library also brings
+`kotlinx-coroutines-core` with it (see [More of mpv's API](#more-of-mpvs-api-since-140)).
 
 <!-- example-unchecked: the 1.3.0 API, which has no region in DocExamples.kt -->
 ```kotlin
@@ -51,18 +51,18 @@ mpv.destroy()
 
 `MPVLib` creates an mpv instance, attaches it to a `Surface`, sets options and properties, runs
 commands, and passes mpv's events and log messages to observers (`addObserver`,
-`addLogObserver`). Observer callbacks run on mpv's event thread (named `mpv-event` in traces, on
-`main`). The setters (`setPropertyInt`, `setPropertyString`, ...) log an mpv error rather than
-report it; see [Errors](#more-of-mpvs-api-on-main-not-in-130) for the calls that throw it. Everything else is mpv itself:
+`addLogObserver`). Observer callbacks run on mpv's event thread (named `mpv-event` in traces,
+since 1.4.0). The setters (`setPropertyInt`, `setPropertyString`, ...) log an mpv error rather than
+report it; see [Errors](#more-of-mpvs-api-since-140) for the calls that throw it. Everything else is mpv itself:
 its [manual](https://mpv.io/manual/stable/) is the reference for options, properties and commands.
 
 The Kotlin package is `dev.jdtech.mpv`, as upstream's ([ADR 0001](docs/adr/0001-keep-the-kotlin-package.md)).
 Coming from `dev.jdtech.mpv:libmpv`, change the coordinate and nothing else. Do not depend on both:
 they ship the same native libraries under the same file names.
 
-## More of mpv's API (on `main`, not in 1.3.0)
+## More of mpv's API (since 1.4.0)
 
-`main` adds structured values, suspend functions, flows, custom protocols, `AutoCloseable` and a
+1.4.0 adds structured values, suspend functions, flows, custom protocols, `AutoCloseable` and a
 logcat level, as extension functions on `MPVLib` in the same package ([ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)).
 Nothing above changes: the 1.3.0 API is the same, and its observers get what they got before.
 The new functions report mpv's errors as `MpvException` (with mpv's code in `error`), where the
@@ -261,17 +261,14 @@ checks that the README shows them unchanged. The exact public API is in
 
 ## Released and unreleased
 
-The latest release is **1.3.0**. Its AAR holds the C++ JNI wrapper inherited from upstream, and it
-was built by the old single-job pipeline.
-
-`main` has the following, which will be in the next release:
+The latest release is **1.4.0**, the first built by the new pipeline. Since 1.3.0 it has:
 
 - **A JNI wrapper in Rust** ([ADR 0003](docs/adr/0003-rust-jni-wrapper.md)). The Kotlin API is
   unchanged. A call after `destroy()` throws `IllegalStateException` instead of touching freed
   memory, a call racing `destroy()` on another thread is safe, and a second `destroy()` does
   nothing. `destroy()` from an observer or log callback throws `IllegalStateException` (call it
   from another thread). A `null` string argument throws `NullPointerException`.
-- **More of mpv's API** ([above](#more-of-mpvs-api-on-main-not-in-130), [ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)):
+- **More of mpv's API** ([above](#more-of-mpvs-api-since-140), [ADR 0005](docs/adr/0005-api-on-top-of-mpvlib.md)):
   structured values (`MpvNode`), suspend functions on mpv's async API (also typed:
   `getDoublePropertyAsync` and the rest), flows of properties and events, custom protocols
   implemented in Kotlin, `unobserveProperty`, `AutoCloseable`, and `setLogcatLevel`. All additive.
@@ -279,12 +276,16 @@ was built by the old single-job pipeline.
   library now depends on `kotlinx-coroutines-core`.
 - **An mpv patch** that rounds the AudioTrack buffer to whole frames, so 22,050 Hz audio is no
   longer silent ([ephyra#659](https://github.com/midasvo/ephyra/issues/659)).
+- **An FFmpeg patch** so https works when the server asks for an optional client certificate
+  (Caddy `verify_if_given`, nginx `ssl_verify_client optional`) ([#56](https://github.com/midasvo/libmpv-android/issues/56)).
 - **More checks in CI:** the dynamic dependencies of every library in every ABI, the wrapper's JNI
   exports against the Kotlin declarations, and instrumented tests on three emulators (Android 8.0,
   32-bit x86, and a current one) that play real files and subtitles, check which decoders, demuxers
   and protocols the build contains, and run an app that uses the library minified by R8.
 - **A new build pipeline** ([ADR 0004](docs/adr/0004-build-pipeline.md)). Releases built by it also
   come with an SBOM and a provenance attestation.
+
+`main` has nothing a user would notice beyond 1.4.0 yet.
 
 ## What is in the AAR
 

@@ -299,11 +299,12 @@ versions. `git diff vA.B.C -- libmpv/api/libmpv.api` against the last release sh
 A published version can never be replaced on Maven Central. If something is wrong, release the next
 patch version.
 
-**Not proven yet.** No release has been made with this pipeline; 1.3.0 was the last one made with the
-old one. The dry run covers the build, the signing, the release notes and the Maven publication
-(to the runner's local repository); it ran once on `main`, on 2026-11-24, and passed. What only a real release exercises: the `release` environment and its secrets, the
-provenance attestation, `gh release create` of the draft, and the upload to Maven Central. Watch the
-first release closely and check the attestation (step 7).
+**Proven once.** 1.4.0 (2026-11-25) was the first release made with this pipeline; 1.3.0 was the
+last one made with the old one. It exercised the `release` environment and its secrets, the
+provenance attestation, `gh release create` of the draft and the upload to Maven Central, and the
+AAR on Maven Central was the tested one byte for byte. The tag push needed the maintainer's bypass
+of the tag ruleset. Flaky steps seen in the dry run before it: an instrumented test job that hung
+(cancel it and re-run the failed jobs) and a Gradle plugin that did not resolve (re-run).
 
 ## Verifying a release
 
