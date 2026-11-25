@@ -1,0 +1,38 @@
+tls_mbedtls: register the client certificate only when one was loaded
+
+tls_open() always calls mbedtls_ssl_conf_own_cert(), also when no
+cert_file/cert_pem was given, so mbedTLS gets an empty certificate and an
+empty key. When a server asks for an optional client certificate (Caddy
+client_auth mode verify_if_given, nginx ssl_verify_client optional),
+mbedTLS answers with that empty certificate and then fails to sign the
+CertificateVerify with the empty key: "TLS handshake failed." on TLS 1.3,
+"mbedtls_ssl_handshake returned -0x3e80" on TLS 1.2. Without an own
+certificate configured, mbedTLS sends an empty certificate list instead,
+which a server with an optional request accepts. A configured certificate
+(cert_file/key_file, mpv's tls-cert-file/tls-key-file) and the generated
+one of a listening socket are still registered as before.
+
+Issue: https://github.com/midasvo/libmpv-android/issues/56
+       (https://github.com/midasvo/ephyra/issues/960)
+Upstream: the same code is in FFmpeg n7.1.1, n8.1, n9.0.2, n9.1 and master
+(checked 2026-11-24); not sent yet, worth sending to FFmpeg. Drop this
+patch once an FFmpeg release contains a fix.
+
+diff --git a/libavformat/tls_mbedtls.c b/libavformat/tls_mbedtls.c
+index 211652d..c514069 100644
+--- a/libavformat/tls_mbedtls.c
++++ b/libavformat/tls_mbedtls.c
+@@ -646,8 +646,11 @@ static int tls_open(URLContext *h, const char *uri, int flags, AVDictionary **op
+     mbedtls_ssl_conf_rng(&tls_ctx->ssl_config, mbedtls_ctr_drbg_random, &tls_ctx->ctr_drbg_context);
+     mbedtls_ssl_conf_ca_chain(&tls_ctx->ssl_config, &tls_ctx->ca_cert, NULL);
+ 
+-    // set own certificate and private key
+-    if ((ret = mbedtls_ssl_conf_own_cert(&tls_ctx->ssl_config, &tls_ctx->own_cert, &tls_ctx->priv_key)) != 0) {
++    // set own certificate and private key, only when one was loaded: an empty one
++    // is sent when a server asks for an optional client certificate, and then the
++    // handshake fails because nothing can sign with the empty key
++    if (tls_ctx->own_cert.raw.p &&
++        (ret = mbedtls_ssl_conf_own_cert(&tls_ctx->ssl_config, &tls_ctx->own_cert, &tls_ctx->priv_key)) != 0) {
+         av_log(h, AV_LOG_ERROR, "mbedtls_ssl_conf_own_cert returned %d\n", ret);
+         goto fail;
+     }

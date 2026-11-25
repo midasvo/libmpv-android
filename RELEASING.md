@@ -83,10 +83,14 @@ By area, compared with upstream:
   `MpvException.kt`, `internal/`), with `kotlinx-coroutines-core` as an `api` dependency and
   ProGuard rules for the classes libplayer calls by name. The public API is checked against
   `libmpv/api/libmpv.api`.
-- **The native build.** `buildscripts/patches/mpv/`: mpv source patches, applied by `patch.sh` with
-  `git apply`. `0001-ao_audiotrack-align-buffer-to-frames.patch` rounds the AudioTrack buffer to whole
+- **The native build.** `buildscripts/patches/<dep>/`: source patches, applied by `patch.sh` with
+  `git apply` (the folder is named after the dependency's folder in `deps/`).
+  `mpv/0001-ao_audiotrack-align-buffer-to-frames.patch` rounds the AudioTrack buffer to whole
   frames, so 22,050 Hz audio is no longer silent ([ephyra#659](https://github.com/midasvo/ephyra/issues/659));
-  drop it once a released mpv includes a fix. `scripts/mpv.sh` builds with `-Dbuild-date=false`, so
+  drop it once a released mpv includes a fix. `ffmpeg/0001-tls_mbedtls-no-empty-client-certificate.patch`
+  registers a client certificate with mbedTLS only when one was loaded, so a server that asks for an
+  optional client certificate no longer fails the handshake ([#56](https://github.com/midasvo/libmpv-android/issues/56));
+  drop it once a released FFmpeg includes a fix. `scripts/mpv.sh` builds with `-Dbuild-date=false`, so
   `libmpv.so` is reproducible. `depinfo.sh` and `download-deps.sh`: sha256-verified tarballs, the
   curl version format (`8_23_0`), a pinned gas-preprocessor and a pinned meson (`v_meson`, installed
   by `include/install-system-deps.sh`). `scripts/player.sh` builds the wrapper and fills `jniLibs`;

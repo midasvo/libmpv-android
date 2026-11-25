@@ -202,6 +202,7 @@ mpv.destroy()</code></pre>
             <li><code>destroy()</code> from a callback throws (call it from another thread), and a <code>null</code> string argument throws <code>NullPointerException</code>.</li>
             <li><strong>More of mpv's API</strong> (<a href="#api">above</a>): structured values, suspend functions, flows, custom protocols, <code>unobserveProperty</code>, <code>AutoCloseable</code> and <code>setLogcatLevel</code>. All additive.</li>
             <li>An mpv patch that rounds the AudioTrack buffer to whole frames, so 22,050 Hz audio is no longer silent.</li>
+            <li>An FFmpeg patch so https works when the server asks for an optional client certificate (Caddy <code>verify_if_given</code>, nginx <code>ssl_verify_client optional</code>).</li>
             <li>A new build pipeline. Releases built by it come with an SBOM and a provenance attestation.</li>
           </ul>
         </div>
